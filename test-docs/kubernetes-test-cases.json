@@ -1,0 +1,118 @@
+{
+  "test_name": "Kubernetes RAG 效果测试",
+  "description": "使用Kubernetes官方中文文档测试RAG服务的检索和生成能力",
+  "test_cases": [
+    {
+      "id": 1,
+      "category": "基础概念",
+      "question": "Pod是什么？它在Kubernetes中扮演什么角色？",
+      "expected_keywords": ["最小调度单位", "容器组", "Pod生命周期", "Pod网络"],
+      "difficulty": "基础"
+    },
+    {
+      "id": 2,
+      "category": "基础概念",
+      "question": "Deployment和ReplicaSet有什么区别？",
+      "expected_keywords": ["声明式更新", "回滚", "副本管理", "滚动更新"],
+      "difficulty": "基础"
+    },
+    {
+      "id": 3,
+      "category": "基础概念",
+      "question": "Kubernetes的Service是什么？它解决了什么问题？",
+      "expected_keywords": ["服务发现", "负载均衡", "ClusterIP", "NodePort"],
+      "difficulty": "基础"
+    },
+    {
+      "id": 4,
+      "category": "工作负载",
+      "question": "如何创建一个Deployment？需要哪些必填字段？",
+      "expected_keywords": ["apiVersion", "kind", "metadata", "spec", "replicas", "selector", "template"],
+      "difficulty": "基础"
+    },
+    {
+      "id": 5,
+      "category": "配置管理",
+      "question": "ConfigMap和Secret有什么区别？各有什么使用场景？",
+      "expected_keywords": ["非敏感数据", "敏感数据", "base64编码", "环境变量", "卷挂载"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 6,
+      "category": "配置管理",
+      "question": "如何在Pod中使用ConfigMap？有哪些注入方式？",
+      "expected_keywords": ["环境变量", "卷挂载", "envFrom", "volumeMounts"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 7,
+      "category": "网络",
+      "question": "ClusterIP、NodePort和LoadBalancer三种Service类型有什么区别？",
+      "expected_keywords": ["集群内部", "节点端口", "云负载均衡", "网络暴露"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 8,
+      "category": "网络",
+      "question": "Ingress是什么？它与Service的关系是什么？",
+      "expected_keywords": ["入口控制器", "HTTP路由", "域名", "TLS终止", "路径规则"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 9,
+      "category": "存储",
+      "question": "PersistentVolume和PersistentVolumeClaim是什么？它们如何工作？",
+      "expected_keywords": ["存储抽象", "声明", "绑定", "存储类", "回收策略"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 10,
+      "category": "存储",
+      "question": "StorageClass的作用是什么？如何动态创建存储？",
+      "expected_keywords": ["存储类", "Provisioner", "参数", "动态供应", "PV"],
+      "difficulty": "中等"
+    },
+    {
+      "id": 11,
+      "category": "调度",
+      "question": "如何让Pod调度到特定的节点上？",
+      "expected_keywords": ["nodeSelector", "nodeAffinity", "污点", "容忍"],
+      "difficulty": "高级"
+    },
+    {
+      "id": 12,
+      "category": "调度",
+      "question": "Pod的资源请求和限制是什么？如何配置？",
+      "expected_keywords": ["requests", "limits", "CPU", "内存", "QoS"],
+      "difficulty": "高级"
+    },
+    {
+      "id": 13,
+      "category": "故障排查",
+      "question": "Pod一直处于Pending状态可能是什么原因？",
+      "expected_keywords": ["资源不足", "节点选择器", "PVC未绑定", "镜像拉取失败"],
+      "difficulty": "高级"
+    },
+    {
+      "id": 14,
+      "category": "故障排查",
+      "question": "如何查看Pod的日志？如何调试容器问题？",
+      "expected_keywords": ["kubectl logs", "kubectl describe", "kubectl exec", "事件"],
+      "difficulty": "基础"
+    },
+    {
+      "id": 15,
+      "category": "安全",
+      "question": "Kubernetes的RBAC是什么？如何配置角色和权限？",
+      "expected_keywords": ["Role", "ClusterRole", "RoleBinding", "ServiceAccount"],
+      "difficulty": "高级"
+    }
+  ],
+  "evaluation_metrics": {
+    "retrieval_relevance": "检索到的文档片段与问题的相关程度",
+    "answer_completeness": "答案是否涵盖问题的关键要点",
+    "answer_accuracy": "信息是否准确无误",
+    "answer_usability": "答案是否易于理解和应用"
+  },
+  "total_test_cases": 15
+}
