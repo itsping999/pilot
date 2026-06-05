@@ -9,6 +9,7 @@ mod embedding;
 mod generation;
 mod http;
 mod ingestion;
+mod middleware;
 mod models;
 mod rag;
 mod retrieval;
@@ -45,6 +46,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         config.ui_enabled,
         config.request_body_limit_bytes,
         config.api_token.clone(),
+        config.rate_limit_rpm,
     );
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
     let addr: SocketAddr = listener.local_addr()?;

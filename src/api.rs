@@ -11,12 +11,15 @@ use log::info;
 use std::convert::Infallible;
 
 use crate::contracts::{
-    CreateDocumentRequest, CreateDocumentResponse, DeleteDocumentResponse, HealthResponse,
-    ListChunksResponse, ListDocumentsResponse, ListQueryHistoryResponse, QueryHistoryParams,
-    QueryRequest,
+    CreateDocumentRequest, CreateDocumentResponse, DeleteDocumentResponse, HealthDetailResponse,
+    HealthResponse, ListChunksResponse, ListDocumentsResponse, ListQueryHistoryResponse,
+    QueryHistoryParams, QueryRequest, UpdateDocumentRequest,
 };
 use crate::http::{ApiError, ApiResponse};
 use crate::ingestion::document_title_from_text;
+use crate::middleware::{
+    RateLimiter, cors_middleware, rate_limit_middleware, request_id_middleware,
+};
 use crate::models::{Document, RagResponse, default_access_scope, normalize_access_scope};
 use crate::rag::RagService;
 use crate::ui;
@@ -32,23 +35,31 @@ pub fn build_router(
     ui_enabled: bool,
     request_body_limit_bytes: usize,
     api_token: Option<String>,
+    requests_per_minute: u32,
 ) -> Router {
+    let rate_limiter = Arc::new(RateLimiter::new(requests_per_minute));
     let state = AppState {
         rag,
         api_token: api_token.map(Arc::from),
     };
     let api_routes = Router::new()
         .route("/health", get(health))
+        .route("/health/detail", get(health_detail))
         .route("/documents", get(list_documents).post(create_document))
         .route("/documents/upload", post(upload_document))
-        .route("/documents/{id}", get(get_document).delete(delete_document))
+        .route(
+            "/documents/{id}",
+            get(get_document)
+                .put(update_document)
+                .delete(delete_document),
+        )
         .route("/documents/{id}/chunks", get(list_document_chunks))
         .route("/rag/query", post(query_rag))
         .route("/rag/query/stream", post(query_rag_stream))
         .route("/rag/history", get(list_query_history))
         .layer(DefaultBodyLimit::max(request_body_limit_bytes));
 
-    if ui_enabled {
+    let app = if ui_enabled {
         info!("UI enabled: serving at /, /upload, and /qa");
         api_routes
             .merge(Router::new().route("/", get(ui::serve_upload)))
@@ -60,7 +71,14 @@ pub fn build_router(
     } else {
         info!("UI disabled");
         api_routes.with_state(state)
-    }
+    };
+
+    app.layer(axum::middleware::from_fn(cors_middleware))
+        .layer(axum::middleware::from_fn(request_id_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
 }
 
 type ApiResult<T> = Result<Json<ApiResponse<T>>, ApiError>;
@@ -68,6 +86,24 @@ type ApiResult<T> = Result<Json<ApiResponse<T>>, ApiError>;
 async fn health() -> Json<ApiResponse<HealthResponse>> {
     Json(ApiResponse::ok(HealthResponse {
         status: "ok".to_string(),
+    }))
+}
+
+async fn health_detail(State(state): State<AppState>) -> Json<ApiResponse<HealthDetailResponse>> {
+    let documents = state
+        .rag
+        .list_documents()
+        .map(|docs| docs.len())
+        .unwrap_or(0);
+    let embedding_model = state.rag.embedding_model_name().to_string();
+    let generator_type = state.rag.generator_type().to_string();
+
+    Json(ApiResponse::ok(HealthDetailResponse {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        documents,
+        embedding_model,
+        generator: generator_type,
     }))
 }
 
@@ -107,6 +143,60 @@ async fn create_document(
         id,
         chunks,
         status: "indexed".to_string(),
+    })))
+}
+
+async fn update_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateDocumentRequest>,
+) -> ApiResult<CreateDocumentResponse> {
+    require_auth(&state, &headers)?;
+
+    let existing = {
+        let rag = state.rag.clone();
+        let id_for_lookup = id.clone();
+        run_blocking(move || rag.get_document(&id_for_lookup)).await?
+    };
+    if existing.is_none() {
+        return Err(ApiError::not_found("document not found"));
+    }
+
+    let existing = existing.unwrap();
+    let title = request
+        .title
+        .and_then(clean_optional)
+        .unwrap_or(existing.title);
+    let text = request
+        .text
+        .and_then(clean_optional)
+        .unwrap_or(existing.text);
+    let source = request
+        .source
+        .and_then(clean_optional)
+        .unwrap_or(existing.source);
+    let access_scope = request
+        .access_scope
+        .and_then(|scope| normalize_access_scope(&scope))
+        .unwrap_or(existing.access_scope);
+
+    let document = Document {
+        id: id.clone(),
+        title,
+        source,
+        access_scope,
+        text,
+    };
+
+    let rag = state.rag.clone();
+    let chunks = run_blocking(move || rag.add_document(document)).await?;
+    info!("document updated: id={} chunks={}", id, chunks);
+
+    Ok(Json(ApiResponse::ok(CreateDocumentResponse {
+        id,
+        chunks,
+        status: "updated".to_string(),
     })))
 }
 
@@ -294,18 +384,13 @@ async fn query_rag_stream(
         access_scopes.push(access_scope);
     }
 
-    // First get the context (non-streaming)
     let rag = state.rag.clone();
     let q = question.clone();
     let response = run_blocking(move || rag.answer_with_scopes(&q, top_k, &access_scopes)).await?;
 
-    // Then stream the answer character by character
     let answer = response.answer.clone();
-    let _citations_json = serde_json::to_string(&response.citations).unwrap_or_default();
-    let _confidence_json = serde_json::to_string(&response.confidence).unwrap_or_default();
 
     let stream = async_stream::stream! {
-        // Send metadata first
         let meta = serde_json::json!({
             "type": "metadata",
             "citations": response.citations,
@@ -313,7 +398,6 @@ async fn query_rag_stream(
         });
         yield Ok(Event::default().data(meta.to_string()));
 
-        // Stream answer character by character
         for ch in answer.chars() {
             let chunk = serde_json::json!({
                 "type": "token",
@@ -323,7 +407,6 @@ async fn query_rag_stream(
             tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         }
 
-        // Send done signal
         yield Ok(Event::default().data(r#"{"type":"done"}"#));
     };
 

@@ -2,6 +2,7 @@ use crate::config::{ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig}
 use crate::models::RetrievedChunk;
 
 pub trait Generator: Send + Sync {
+    fn name(&self) -> &str;
     fn generate(&self, question: &str, context: &[RetrievedChunk])
     -> Result<String, GenerateError>;
 }
@@ -24,6 +25,10 @@ impl std::error::Error for GenerateError {}
 pub struct ExtractiveGenerator;
 
 impl Generator for ExtractiveGenerator {
+    fn name(&self) -> &str {
+        "extractive"
+    }
+
     fn generate(
         &self,
         question: &str,
@@ -350,6 +355,10 @@ impl ChatCompletionsGenerator {
 }
 
 impl Generator for ChatCompletionsGenerator {
+    fn name(&self) -> &str {
+        "chat_completions"
+    }
+
     fn generate(
         &self,
         question: &str,
@@ -431,6 +440,10 @@ impl ClaudeMessagesGenerator {
 }
 
 impl Generator for ClaudeMessagesGenerator {
+    fn name(&self) -> &str {
+        "claude"
+    }
+
     fn generate(
         &self,
         question: &str,

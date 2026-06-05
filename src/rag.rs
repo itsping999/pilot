@@ -80,6 +80,14 @@ impl RagService {
         self.store.list_query_history(limit)
     }
 
+    pub fn embedding_model_name(&self) -> &str {
+        self.embedder.model_name()
+    }
+
+    pub fn generator_type(&self) -> &str {
+        self.generator.name()
+    }
+
     pub fn answer(&self, question: &str, top_k: usize) -> Result<RagResponse, RagError> {
         self.answer_with_scopes(question, top_k, &[])
     }

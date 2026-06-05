@@ -57,3 +57,20 @@ pub struct QueryRequest {
     #[serde(default)]
     pub access_scopes: Vec<String>,
 }
+
+#[derive(Deserialize)]
+pub struct UpdateDocumentRequest {
+    pub title: Option<String>,
+    pub text: Option<String>,
+    pub source: Option<String>,
+    pub access_scope: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct HealthDetailResponse {
+    pub status: String,
+    pub version: String,
+    pub documents: usize,
+    pub embedding_model: String,
+    pub generator: String,
+}

@@ -218,6 +218,7 @@ mod tests {
             chunk_overlap: 120,
             embedding: test_embedding_config(),
             rag_mode: RagMode::Agentic,
+            rate_limit_rpm: 300,
             llm_provider: LlmProvider::OpenAiCompatible,
             chat_completions: ChatCompletionsProviderConfig {
                 name: "openai-compatible".to_string(),
@@ -249,6 +250,7 @@ mod tests {
             chunk_overlap: 120,
             embedding: test_embedding_config(),
             rag_mode: RagMode::Agentic,
+            rate_limit_rpm: 300,
             llm_provider: LlmProvider::Custom,
             chat_completions: ChatCompletionsProviderConfig {
                 name: "local-custom".to_string(),
@@ -280,6 +282,7 @@ mod tests {
             chunk_overlap: 120,
             embedding: test_embedding_config(),
             rag_mode: RagMode::Agentic,
+            rate_limit_rpm: 300,
             llm_provider: LlmProvider::Claude,
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),
@@ -376,6 +379,7 @@ mod tests {
             chunk_overlap: 120,
             embedding: test_embedding_config(),
             rag_mode: RagMode::Auto,
+            rate_limit_rpm: 300,
             llm_provider: LlmProvider::Extractive,
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),

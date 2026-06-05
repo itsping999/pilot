@@ -17,6 +17,7 @@ pub struct Config {
     pub llm_provider: LlmProvider,
     pub chat_completions: ChatCompletionsProviderConfig,
     pub claude: ClaudeMessagesProviderConfig,
+    pub rate_limit_rpm: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +132,12 @@ impl Config {
         let chat_completions = ChatCompletionsProviderConfig::from_env(&llm_provider);
         let claude = ClaudeMessagesProviderConfig::from_env(&llm_provider);
 
+        let rate_limit_rpm = env::var("KNOWLEDGE_PILOT_RATE_LIMIT_RPM")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(300);
+
         Self {
             addr,
             db_path,
@@ -144,6 +151,7 @@ impl Config {
             llm_provider,
             chat_completions,
             claude,
+            rate_limit_rpm,
         }
     }
 }
