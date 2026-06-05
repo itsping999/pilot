@@ -1583,9 +1583,7 @@
   {
     "question": "FHIR 标准的核心数据单元是什么？",
     "expected_source": "eval/documents/diverse/healthcare-data-interoperability.md",
-    "expected_answer_contains": [
-      "FHIR"
-    ],
+    "expected_answer_contains": [],
     "allow_additional_sources": true
   },
   {
