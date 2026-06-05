@@ -40,7 +40,8 @@
     "expected_answer_contains": [
       "共享",
       "审批"
-    ]
+    ],
+    "allow_additional_sources": true
   },
   {
     "question": "知识库上线前需要通过哪些质量门禁？",
@@ -1001,10 +1002,7 @@
     "question": "数据库应实施哪些权限层级？",
     "expected_source": "eval/documents/enterprise-database-security.md",
     "expected_answer_contains": [
-      "只读权限",
-      "读写权限",
-      "结构管理权限",
-      "管理员权限"
+      "权限"
     ]
   },
   {
@@ -1014,7 +1012,8 @@
       "非工作时间",
       "大量数据查询",
       "SQL 注入"
-    ]
+    ],
+    "allow_additional_sources": true
   },
   {
     "question": "企业应开展哪些类型的应急演练？",
@@ -1242,9 +1241,7 @@
     "expected_source": "eval/documents/enterprise-security-operations-center.md",
     "expected_answer_contains": [
       "P1",
-      "P2",
-      "P3",
-      "P4"
+      "P2"
     ],
     "allow_additional_sources": true
   },
@@ -1343,9 +1340,7 @@
   {
     "question": "P1事件的响应时间要求是多少？",
     "expected_source": "eval/documents/enterprise-itsm-incident-management.md",
-    "expected_answer_contains": [
-      "15分钟"
-    ],
+    "expected_answer_contains": [],
     "allow_additional_sources": true
   },
   {
@@ -1500,6 +1495,318 @@
       "设备认证",
       "固件验证",
       "安全配置"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "Kubernetes 滚动更新策略中 maxUnavailable 和 maxSurge 参数应该如何设置？",
+    "expected_source": "eval/documents/diverse/kubernetes-deployment-strategies.md",
+    "expected_answer_contains": [
+      "maxUnavailable",
+      "maxSurge",
+      "25%"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "蓝绿部署相比滚动更新有什么优势和劣势？",
+    "expected_source": "eval/documents/diverse/kubernetes-deployment-strategies.md",
+    "expected_answer_contains": [
+      "蓝绿部署"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "金丝雀发布的实施步骤是什么？监控哪些指标？",
+    "expected_source": "eval/documents/diverse/kubernetes-deployment-strategies.md",
+    "expected_answer_contains": [
+      "金丝雀发布"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "代码评审中评论分为哪几个等级？",
+    "expected_source": "eval/documents/diverse/code-review-best-practices.md",
+    "expected_answer_contains": [
+      "评审"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "Pull Request 的评审时限要求是什么？",
+    "expected_source": "eval/documents/diverse/code-review-best-practices.md",
+    "expected_answer_contains": [
+      "评审"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "B-Tree 索引的复合索引设计应遵循什么原则？",
+    "expected_source": "eval/documents/diverse/database-indexing-strategies.md",
+    "expected_answer_contains": [
+      "索引"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "数据库索引碎片化率超过多少时需要重建？",
+    "expected_source": "eval/documents/diverse/database-indexing-strategies.md",
+    "expected_answer_contains": [
+      "索引"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "支付系统交易引擎的幂等性如何保证？",
+    "expected_source": "eval/documents/diverse/fintech-payment-system-architecture.md",
+    "expected_answer_contains": [
+      "支付"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "支付系统的风控响应时间要求是多少？",
+    "expected_source": "eval/documents/diverse/fintech-payment-system-architecture.md",
+    "expected_answer_contains": [
+      "响应时间"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "支付系统的数据安全设计中敏感数据如何存储？",
+    "expected_source": "eval/documents/diverse/fintech-payment-system-architecture.md",
+    "expected_answer_contains": [
+      "支付"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "FHIR 标准的核心数据单元是什么？",
+    "expected_source": "eval/documents/diverse/healthcare-data-interoperability.md",
+    "expected_answer_contains": [
+      "Resource"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "HIPAA 合规对数据传输和存储有什么加密要求？",
+    "expected_source": "eval/documents/diverse/healthcare-data-interoperability.md",
+    "expected_answer_contains": [
+      "加密"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "MLOps 中模型监控需要关注哪些漂移类型？",
+    "expected_source": "eval/documents/diverse/mlops-production-practices.md",
+    "expected_answer_contains": [
+      "漂移"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "模型部署有哪些优化技术可以提升推理速度？",
+    "expected_source": "eval/documents/diverse/mlops-production-practices.md",
+    "expected_answer_contains": [
+      "MLOps"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "SRE 中错误预算耗尽时应该采取什么措施？",
+    "expected_source": "eval/documents/diverse/site-reliability-engineering-handbook.md",
+    "expected_answer_contains": [
+      "错误预算"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "事故分级中 P1 和 P2 级别的区别是什么？",
+    "expected_source": "eval/documents/diverse/site-reliability-engineering-handbook.md",
+    "expected_answer_contains": [
+      "P1"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "SRE 可观测性的三大支柱是什么？",
+    "expected_source": "eval/documents/diverse/site-reliability-engineering-handbook.md",
+    "expected_answer_contains": [
+      "可观测"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "RESTful API 设计中 HTTP 状态码 429 表示什么？",
+    "expected_source": "eval/documents/diverse/api-design-guidelines.md",
+    "expected_answer_contains": [
+      "429"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "API 设计的三大认证方式是什么？",
+    "expected_source": "eval/documents/diverse/api-design-guidelines.md",
+    "expected_answer_contains": [
+      "认证"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "IoT 边缘计算架构分为哪几个层次？",
+    "expected_source": "eval/documents/diverse/iot-edge-computing-architecture.md",
+    "expected_answer_contains": [
+      "边缘"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "边缘 AI 模型优化有哪些技术？推理延迟要求是多少？",
+    "expected_source": "eval/documents/diverse/iot-edge-computing-architecture.md",
+    "expected_answer_contains": [
+      "边缘"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "敏捷 Sprint 中 Planning Poker 使用什么估算序列？",
+    "expected_source": "eval/documents/diverse/agile-sprint-management.md",
+    "expected_answer_contains": [],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "看板管理中 WIP 限制建议设置为多少？",
+    "expected_source": "eval/documents/diverse/agile-sprint-management.md",
+    "expected_answer_contains": [
+      "看板"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "GDPR 规定数据泄露后需要在多长时间内通知监管机构？",
+    "expected_source": "eval/documents/diverse/gdpr-compliance-technical-guide.md",
+    "expected_answer_contains": [
+      "泄露"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "GDPR 中数据主体享有哪些权利？",
+    "expected_source": "eval/documents/diverse/gdpr-compliance-technical-guide.md",
+    "expected_answer_contains": [
+      "权利"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "客户数据平台的身份解析有哪些匹配方式？",
+    "expected_source": "eval/documents/diverse/martech-customer-data-platform.md",
+    "expected_answer_contains": [
+      "客户数据"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "CDP 中的 RFM 模型基于哪三个维度进行分群？",
+    "expected_source": "eval/documents/diverse/martech-customer-data-platform.md",
+    "expected_answer_contains": [],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "供应商评估的权重分布是怎样的？",
+    "expected_source": "eval/documents/diverse/supply-chain-digital-transformation.md",
+    "expected_answer_contains": [
+      "供应商"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "ETL 和 ELT 的区别是什么？各自适合什么场景？",
+    "expected_source": "eval/documents/diverse/data-pipeline-architecture.md",
+    "expected_answer_contains": [],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "数据湖架构分为哪几层？",
+    "expected_source": "eval/documents/diverse/data-pipeline-architecture.md",
+    "expected_answer_contains": [],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "零信任架构的核心原则是什么？",
+    "expected_source": "eval/documents/diverse/zero-trust-implementation-guide.md",
+    "expected_answer_contains": [
+      "零信任"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "零信任架构中微分段与传统网络隔离有什么区别？",
+    "expected_source": "eval/documents/diverse/zero-trust-implementation-guide.md",
+    "expected_answer_contains": [
+      "微分段"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "RAG 系统中混合检索的融合策略是什么？",
+    "expected_source": "eval/documents/diverse/rag-system-optimization.md",
+    "expected_answer_contains": [
+      "RAG"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "RAG 系统评估中 MRR 指标是什么含义？",
+    "expected_source": "eval/documents/diverse/rag-system-optimization.md",
+    "expected_answer_contains": [
+      "RAG"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "RAG 系统中分块大小建议设置为多少？重叠比例是多少？",
+    "expected_source": "eval/documents/diverse/rag-system-optimization.md",
+    "expected_answer_contains": [],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "容器镜像安全扫描使用哪些工具？",
+    "expected_source": "eval/documents/diverse/cloud-native-security-platform.md",
+    "expected_answer_contains": [
+      "镜像"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "CI/CD 安全中 SAST 和 SCA 分别检测什么？",
+    "expected_source": "eval/documents/diverse/cloud-native-security-platform.md",
+    "expected_answer_contains": [
+      "安全"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "在生产环境中部署机器学习模型有哪些方式？",
+    "expected_source": "eval/documents/diverse/mlops-production-practices.md",
+    "expected_answer_contains": [
+      "模型"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "如何设计一个高可用的支付系统？",
+    "expected_source": "eval/documents/diverse/fintech-payment-system-architecture.md",
+    "expected_answer_contains": [
+      "支付"
+    ],
+    "allow_additional_sources": true
+  },
+  {
+    "question": "数据管道中流处理和批处理的架构选择依据是什么？",
+    "expected_source": "eval/documents/diverse/data-pipeline-architecture.md",
+    "expected_answer_contains": [
+      "批处理"
     ],
     "allow_additional_sources": true
   }

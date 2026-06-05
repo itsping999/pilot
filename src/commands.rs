@@ -101,6 +101,10 @@ fn run_eval() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut files = Vec::new();
     collect_ingest_files(&documents_dir, &mut files)?;
+    let diverse_dir = documents_dir.join("diverse");
+    if diverse_dir.is_dir() {
+        collect_ingest_files(&diverse_dir, &mut files)?;
+    }
     for path in files {
         let text = fs::read_to_string(&path)?;
         let source = path.to_string_lossy().to_string();
