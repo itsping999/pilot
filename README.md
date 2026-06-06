@@ -110,13 +110,16 @@ Endpoints:
 
 ```http
 GET /health
+GET /health/detail
 GET /documents
 POST /documents
 POST /documents/upload
 GET /documents/{id}
+PUT /documents/{id}
 GET /documents/{id}/chunks
 DELETE /documents/{id}
 POST /rag/query
+POST /rag/query/stream
 GET /rag/history
 GET /upload
 GET /qa
@@ -207,16 +210,17 @@ KNOWLEDGE_PILOT_ADDR=127.0.0.1:8080
 KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db
 KNOWLEDGE_PILOT_API_TOKEN=
 KNOWLEDGE_PILOT_REQUEST_BODY_LIMIT_BYTES=2097152
-KNOWLEDGE_PILOT_CHUNK_SIZE=800
-KNOWLEDGE_PILOT_CHUNK_OVERLAP=120
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama
+KNOWLEDGE_PILOT_CHUNK_SIZE=600
+KNOWLEDGE_PILOT_CHUNK_OVERLAP=100
+KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash
 KNOWLEDGE_PILOT_EMBEDDING_BASE_URL=http://127.0.0.1:11434
 KNOWLEDGE_PILOT_EMBEDDING_PATH=/api/embed
-KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b
+KNOWLEDGE_PILOT_EMBEDDING_MODEL=hash-256
 KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=false
 KNOWLEDGE_PILOT_RAG_MODE=auto
 KNOWLEDGE_PILOT_LLM_PROVIDER=extractive
 KNOWLEDGE_PILOT_UI_ENABLED=true
+KNOWLEDGE_PILOT_RATE_LIMIT_RPM=300
 RUST_LOG=info
 ```
 
@@ -346,7 +350,7 @@ KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
 ./scripts/smoke.sh
 ```
 
-`cargo run -- eval` imports `eval/documents` and runs `eval/cases.json`. The current fixture covers 51 Chinese and English enterprise documents with 101 answer-quality cases. Each case checks that retrieval cites the expected source, avoids unexpected citation sources by default, and, when configured, that the generated answer contains required business key points or the expected confidence level. This keeps regressions visible for retrieval quality, answer completeness, source cleanliness, low-confidence behavior, and formatting.
+`cargo run -- eval` imports `eval/documents` and runs `eval/cases.json`. The current fixture covers 91 Chinese and English Markdown documents with 184 answer-quality cases, including 17 cross-domain fixtures under `eval/documents/diverse/`. Each case checks that retrieval cites the expected source, avoids unexpected citation sources by default, and, when configured, that the generated answer contains required business key points or the expected confidence level. This keeps regressions visible for retrieval quality, answer completeness, source cleanliness, low-confidence behavior, and formatting.
 
 ## Roadmap
 

@@ -7,6 +7,8 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
+const X_REQUEST_ID: header::HeaderName = header::HeaderName::from_static("x-request-id");
+
 // ---------------------------------------------------------------------------
 // CORS middleware
 // ---------------------------------------------------------------------------
@@ -142,27 +144,19 @@ fn client_ip(request: &Request) -> String {
 pub async fn request_id_middleware(mut request: Request, next: Next) -> Response {
     let request_id = request
         .headers()
-        .get("x-request-id")
+        .get(&X_REQUEST_ID)
         .cloned()
         .unwrap_or_else(|| {
             HeaderValue::from_str(&format!("req-{}", uuid_simple()))
                 .unwrap_or_else(|_| HeaderValue::from_static("req-unknown"))
         });
 
-    request.headers_mut().insert(
-        "x-request-id"
-            .parse::<axum::http::header::HeaderName>()
-            .unwrap(),
-        request_id.clone(),
-    );
+    request
+        .headers_mut()
+        .insert(X_REQUEST_ID, request_id.clone());
 
     let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        "x-request-id"
-            .parse::<axum::http::header::HeaderName>()
-            .unwrap(),
-        request_id,
-    );
+    response.headers_mut().insert(X_REQUEST_ID, request_id);
     response
 }
 

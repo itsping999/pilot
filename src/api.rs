@@ -73,12 +73,12 @@ pub fn build_router(
         api_routes.with_state(state)
     };
 
-    app.layer(axum::middleware::from_fn(cors_middleware))
-        .layer(axum::middleware::from_fn(request_id_middleware))
-        .layer(axum::middleware::from_fn_with_state(
-            rate_limiter,
-            rate_limit_middleware,
-        ))
+    app.layer(axum::middleware::from_fn_with_state(
+        rate_limiter,
+        rate_limit_middleware,
+    ))
+    .layer(axum::middleware::from_fn(request_id_middleware))
+    .layer(axum::middleware::from_fn(cors_middleware))
 }
 
 type ApiResult<T> = Result<Json<ApiResponse<T>>, ApiError>;
@@ -467,4 +467,107 @@ fn current_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    use super::build_router;
+    use crate::app::build_rag_service;
+    use crate::config::{
+        ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig, Config, EmbeddingProvider,
+        EmbeddingProviderConfig, LlmProvider, RagMode,
+    };
+
+    #[tokio::test]
+    async fn rate_limited_responses_keep_cors_and_request_id_headers() {
+        let dir = tempdir().expect("create temp dir");
+        let rag = build_rag_service(&test_config(dir.path().join("knowledge-pilot.db")))
+            .expect("build test rag service");
+        let app = build_router(rag, false, 1024 * 1024, None, 1);
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://console.example")
+                    .header("x-request-id", "req-test")
+                    .body(Body::empty())
+                    .expect("build first request"),
+            )
+            .await
+            .expect("first response");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let limited = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://console.example")
+                    .header("x-request-id", "req-test")
+                    .body(Body::empty())
+                    .expect("build second request"),
+            )
+            .await
+            .expect("limited response");
+
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            limited.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&"https://console.example".parse().expect("valid origin"))
+        );
+        assert_eq!(
+            limited.headers().get("x-request-id"),
+            Some(&"req-test".parse().expect("valid request id"))
+        );
+    }
+
+    fn test_config(db_path: std::path::PathBuf) -> Config {
+        Config {
+            addr: "127.0.0.1:0".parse().expect("test addr"),
+            db_path,
+            api_token: None,
+            ui_enabled: false,
+            request_body_limit_bytes: 1024 * 1024,
+            chunk_size: 600,
+            chunk_overlap: 100,
+            embedding: EmbeddingProviderConfig {
+                provider: EmbeddingProvider::Hash,
+                base_url: "http://127.0.0.1:11434".to_string(),
+                path: "/api/embed".to_string(),
+                model: "hash-256".to_string(),
+                allow_unverified_model: false,
+            },
+            rag_mode: RagMode::Traditional,
+            llm_provider: LlmProvider::Extractive,
+            chat_completions: ChatCompletionsProviderConfig {
+                name: "extractive".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                base_url_configured: false,
+                path: "/chat/completions".to_string(),
+                api_key: None,
+                model: "gpt-4.1-mini".to_string(),
+                auth_header: "Authorization".to_string(),
+                auth_scheme: Some("Bearer".to_string()),
+                extra_headers: Vec::new(),
+            },
+            claude: ClaudeMessagesProviderConfig {
+                name: "claude".to_string(),
+                base_url: "https://api.anthropic.com/v1".to_string(),
+                base_url_configured: false,
+                path: "/messages".to_string(),
+                api_key: None,
+                model: "claude-sonnet-4-20250514".to_string(),
+                anthropic_version: "2023-06-01".to_string(),
+                max_tokens: 1024,
+                extra_headers: Vec::new(),
+            },
+            rate_limit_rpm: 1,
+        }
+    }
 }
