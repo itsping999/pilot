@@ -42,7 +42,7 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 | Eval gate | `eval/cases.json`, `eval/documents/` | Current fixture has 91 Markdown docs and 184 cases, including `eval/documents/diverse/`. |
 | Static UI | `static/index.html`, `static/qa.html`, `static/app.css`, `static/app.js`, `src/ui.rs` | UI is embedded with `include_str!`; rebuild before browser/smoke verification. |
 | Deployment | `Dockerfile`, `compose.yaml`, `deploy/systemd/knowledge-pilot.service`, `.github/workflows/ci.yml` | These files contain deploy-specific env overrides; inspect all of them when config changes. |
-| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, JSON ingest, multipart upload, query, history, delete. |
+| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, detailed health, JSON ingest/update, chunks, multipart upload, query, SSE stream, history, delete. |
 
 ## Current API Surface
 
