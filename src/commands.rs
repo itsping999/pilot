@@ -26,6 +26,7 @@ fn run_ingest(paths: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     for path in paths {
         collect_ingest_files(Path::new(path), &mut files)?;
     }
+    files.sort();
 
     let mut indexed = 0;
     let mut chunks = 0;
@@ -185,6 +186,7 @@ fn collect_eval_document_files(
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut files = Vec::new();
     collect_ingest_files(documents_dir, &mut files)?;
+    files.sort();
     Ok(files)
 }
 
@@ -232,5 +234,22 @@ mod tests {
 
         assert_eq!(files.len(), 2);
         assert_eq!(nested_count, 1);
+    }
+
+    #[test]
+    fn eval_document_collection_is_deterministically_sorted() {
+        let dir = tempdir().expect("create temp dir");
+        let documents = dir.path().join("documents");
+        fs::create_dir_all(&documents).expect("create eval dir");
+        fs::write(documents.join("zeta.md"), "# Zeta").expect("write zeta doc");
+        fs::write(documents.join("alpha.md"), "# Alpha").expect("write alpha doc");
+
+        let files = collect_eval_document_files(&documents).expect("collect docs");
+        let names = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha.md", "zeta.md"]);
     }
 }

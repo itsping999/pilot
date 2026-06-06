@@ -517,13 +517,48 @@ mod tests {
             .expect("limited response");
 
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_common_response_headers(&limited, "https://console.example", "req-test");
+    }
+
+    #[tokio::test]
+    async fn successful_cors_responses_include_origin_vary_header() {
+        let dir = tempdir().expect("create temp dir");
+        let rag = build_rag_service(&test_config(dir.path().join("knowledge-pilot.db")))
+            .expect("build test rag service");
+        let app = build_router(rag, false, 1024 * 1024, None, 300);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://console.example")
+                    .header("x-request-id", "req-cors")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_common_response_headers(&response, "https://console.example", "req-cors");
+    }
+
+    fn assert_common_response_headers(
+        response: &axum::response::Response,
+        origin: &str,
+        request_id: &str,
+    ) {
         assert_eq!(
-            limited.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&"https://console.example".parse().expect("valid origin"))
+            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&origin.parse().expect("valid origin"))
         );
         assert_eq!(
-            limited.headers().get("x-request-id"),
-            Some(&"req-test".parse().expect("valid request id"))
+            response.headers().get(header::VARY),
+            Some(&"Origin".parse().expect("valid vary header"))
+        );
+        assert_eq!(
+            response.headers().get("x-request-id"),
+            Some(&request_id.parse().expect("valid request id"))
         );
     }
 

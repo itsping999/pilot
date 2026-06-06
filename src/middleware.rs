@@ -46,6 +46,7 @@ fn insert_cors_headers(headers: &mut axum::http::HeaderMap, origin: &HeaderValue
         header::ACCESS_CONTROL_MAX_AGE,
         HeaderValue::from_static("3600"),
     );
+    headers.insert(header::VARY, HeaderValue::from_static("Origin"));
 }
 
 // ---------------------------------------------------------------------------
