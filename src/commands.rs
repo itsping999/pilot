@@ -99,12 +99,7 @@ fn run_eval() -> Result<(), Box<dyn std::error::Error>> {
     let documents_dir = eval_root.join("documents");
     let cases_path = eval_root.join("cases.json");
 
-    let mut files = Vec::new();
-    collect_ingest_files(&documents_dir, &mut files)?;
-    let diverse_dir = documents_dir.join("diverse");
-    if diverse_dir.is_dir() {
-        collect_ingest_files(&diverse_dir, &mut files)?;
-    }
+    let files = collect_eval_document_files(&documents_dir)?;
     for path in files {
         let text = fs::read_to_string(&path)?;
         let source = path.to_string_lossy().to_string();
@@ -185,6 +180,14 @@ fn run_eval() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+fn collect_eval_document_files(
+    documents_dir: &Path,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut files = Vec::new();
+    collect_ingest_files(documents_dir, &mut files)?;
+    Ok(files)
+}
+
 fn title_from_path(path: &Path) -> String {
     path.file_stem()
         .and_then(|value| value.to_str())
@@ -202,4 +205,32 @@ struct EvalCase {
     allow_additional_sources: bool,
     expected_confidence_level: Option<ConfidenceLevel>,
     top_k: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::collect_eval_document_files;
+
+    #[test]
+    fn eval_document_collection_does_not_duplicate_nested_diverse_docs() {
+        let dir = tempdir().expect("create temp dir");
+        let documents = dir.path().join("documents");
+        let diverse = documents.join("diverse");
+        fs::create_dir_all(&diverse).expect("create eval dirs");
+        fs::write(documents.join("root.md"), "# Root").expect("write root doc");
+        fs::write(diverse.join("nested.md"), "# Nested").expect("write nested doc");
+
+        let files = collect_eval_document_files(&documents).expect("collect docs");
+        let nested_count = files
+            .iter()
+            .filter(|path| path.ends_with("diverse/nested.md"))
+            .count();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(nested_count, 1);
+    }
 }
