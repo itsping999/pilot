@@ -42,6 +42,8 @@ done
 
 curl -fsS "$BASE_URL/health" >/tmp/kp-smoke-health.json
 grep -q '"code":"ok"' /tmp/kp-smoke-health.json
+curl -fsS "$BASE_URL/health/detail" >/tmp/kp-smoke-health-detail.json
+grep -q '"embedding_model":"hash-256"' /tmp/kp-smoke-health-detail.json
 curl -fsS -o /tmp/kp-smoke-upload.html "$BASE_URL/upload"
 curl -fsS -o /tmp/kp-smoke-qa.html "$BASE_URL/qa"
 
@@ -55,6 +57,18 @@ curl -fsS \
   -d '{"id":"smoke-json","title":"Smoke JSON","source":"smoke-json","text":"KnowledgePilot smoke tests JSON document indexing."}' \
   "$BASE_URL/documents" >/tmp/kp-smoke-json-response.json
 grep -q '"code":"ok"' /tmp/kp-smoke-json-response.json
+grep -q '"status":"indexed"' /tmp/kp-smoke-json-response.json
+
+curl -fsS \
+  -X PUT \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"title":"Smoke JSON Updated","source":"smoke-json","text":"KnowledgePilot smoke tests JSON document updates and chunk listing."}' \
+  "$BASE_URL/documents/smoke-json" >/tmp/kp-smoke-update-response.json
+grep -q '"status":"updated"' /tmp/kp-smoke-update-response.json
+
+curl -fsS -H "$AUTH_HEADER" "$BASE_URL/documents/smoke-json/chunks" >/tmp/kp-smoke-chunks.json
+grep -q '"chunks":' /tmp/kp-smoke-chunks.json
 
 printf 'KnowledgePilot smoke tests multipart Markdown upload.\n' >/tmp/kp-smoke-upload.md
 curl -fsS \
@@ -72,6 +86,15 @@ curl -fsS \
   -d '{"question":"What does KnowledgePilot smoke test?","top_k":3}' \
   "$BASE_URL/rag/query" >/tmp/kp-smoke-query.json
 grep -q '"code":"ok"' /tmp/kp-smoke-query.json
+
+curl -fsS \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"question":"What does KnowledgePilot smoke test?","top_k":3}' \
+  "$BASE_URL/rag/query/stream" >/tmp/kp-smoke-stream.txt
+grep -q '"type":"metadata"' /tmp/kp-smoke-stream.txt
+grep -q '"type":"token"' /tmp/kp-smoke-stream.txt
+grep -q '"type":"done"' /tmp/kp-smoke-stream.txt
 
 curl -fsS -H "$AUTH_HEADER" "$BASE_URL/rag/history?limit=1" >/tmp/kp-smoke-history.json
 grep -q '"code":"ok"' /tmp/kp-smoke-history.json
