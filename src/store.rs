@@ -155,6 +155,51 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub fn is_document_up_to_date(
+        &self,
+        id: &str,
+        title: &str,
+        source: &str,
+        access_scope: &str,
+        text: &str,
+        model: &str,
+    ) -> rusqlite::Result<Option<usize>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT d.title, d.source, d.access_scope, d.text, COUNT(c.id) AS chunk_count,
+                   COUNT(CASE WHEN e.model = ?2 THEN 1 END) AS model_embedding_count
+            FROM documents d
+            LEFT JOIN chunks c ON c.document_id = d.id
+            LEFT JOIN embeddings e ON e.chunk_id = c.id
+            WHERE d.id = ?1
+            GROUP BY d.id
+            "#,
+        )?;
+
+        let mut rows = statement.query(params![id, model])?;
+        if let Some(row) = rows.next()? {
+            let existing_title: String = row.get(0)?;
+            let existing_source: String = row.get(1)?;
+            let existing_access_scope: String = row.get(2)?;
+            let existing_text: String = row.get(3)?;
+            let chunk_count: i64 = row.get(4)?;
+            let model_embedding_count: i64 = row.get(5)?;
+
+            if existing_title == title
+                && existing_source == source
+                && existing_access_scope == access_scope
+                && existing_text == text
+                && chunk_count > 0
+                && chunk_count == model_embedding_count
+            {
+                return Ok(Some(chunk_count as usize));
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn list_documents(&self) -> rusqlite::Result<Vec<DocumentSummary>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
@@ -745,5 +790,85 @@ mod tests {
         assert_eq!(history[0].citations[0].source, "second.md");
         assert_eq!(history[0].confidence.level, ConfidenceLevel::High);
         assert_eq!(history[0].confidence.reason, "strong_retrieval_support");
+    }
+
+    #[test]
+    fn is_document_up_to_date_detects_changes_and_model_match() {
+        let store = store();
+        let document = Document {
+            id: "doc-hash-test".to_string(),
+            title: "Hash Test".to_string(),
+            source: "test.md".to_string(),
+            access_scope: "public".to_string(),
+            text: "Hello world text".to_string(),
+        };
+        let chunk = Chunk {
+            id: "doc-hash-test:0".to_string(),
+            document_id: "doc-hash-test".to_string(),
+            chunk_index: 0,
+            document_title: "Hash Test".to_string(),
+            section: "".to_string(),
+            text: "Hello world text".to_string(),
+            source: "test.md".to_string(),
+            access_scope: "public".to_string(),
+        };
+        let vector = vec![0.1f32; 4];
+
+        // Initially document is not in store
+        let up_to_date = store
+            .is_document_up_to_date(
+                &document.id,
+                &document.title,
+                &document.source,
+                &document.access_scope,
+                &document.text,
+                "test-model",
+            )
+            .expect("check up to date");
+        assert_eq!(up_to_date, None);
+
+        // Save document with embeddings
+        store
+            .replace_document_with_embeddings(&document, &[(chunk, vector)], "test-model")
+            .expect("save document");
+
+        // Now it should report up to date with 1 chunk
+        let up_to_date = store
+            .is_document_up_to_date(
+                &document.id,
+                &document.title,
+                &document.source,
+                &document.access_scope,
+                &document.text,
+                "test-model",
+            )
+            .expect("check up to date");
+        assert_eq!(up_to_date, Some(1));
+
+        // If text changes, it reports None
+        let up_to_date = store
+            .is_document_up_to_date(
+                &document.id,
+                &document.title,
+                &document.source,
+                &document.access_scope,
+                "Changed text",
+                "test-model",
+            )
+            .expect("check up to date");
+        assert_eq!(up_to_date, None);
+
+        // If model changes, it reports None
+        let up_to_date = store
+            .is_document_up_to_date(
+                &document.id,
+                &document.title,
+                &document.source,
+                &document.access_scope,
+                &document.text,
+                "different-model",
+            )
+            .expect("check up to date");
+        assert_eq!(up_to_date, None);
     }
 }

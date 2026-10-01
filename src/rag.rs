@@ -46,6 +46,17 @@ impl RagService {
     }
 
     pub fn add_document(&self, document: Document) -> Result<usize, RagError> {
+        if let Some(chunk_count) = self.store.is_document_up_to_date(
+            &document.id,
+            &document.title,
+            &document.source,
+            &document.access_scope,
+            &document.text,
+            self.embedder.model_name(),
+        )? {
+            return Ok(chunk_count);
+        }
+
         let chunks = chunk_document(&document, self.chunk_size, self.chunk_overlap);
         let mut embedded_chunks = Vec::with_capacity(chunks.len());
         for chunk in &chunks {
