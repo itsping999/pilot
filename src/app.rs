@@ -3,7 +3,9 @@ use std::sync::Arc;
 use log::{info, warn};
 
 use crate::agent::{ChatCompletionsPlanner, ClaudeMessagesPlanner, QueryPlanner};
-use crate::bot::{BotPlanner, BotService, ChatCompletionsBotPlanner, ClaudeMessagesBotPlanner};
+use crate::bot::{
+    BotPlanner, BotProfile, BotService, ChatCompletionsBotPlanner, ClaudeMessagesBotPlanner,
+};
 use crate::config::{Config, EmbeddingProvider, LlmProvider, RagMode};
 use crate::db::open_database;
 use crate::embedding::{Embedder, HashEmbedder, OllamaEmbedder};
@@ -39,21 +41,25 @@ pub fn build_bot_service(
     config: &Config,
     rag: Arc<RagService>,
 ) -> Result<Arc<BotService>, Box<dyn std::error::Error>> {
+    let profile = Arc::new(BotProfile::load_from_path_or_default(
+        config.bot_config_path.as_deref(),
+    ));
     let skills = Arc::new(SqlSkillRegistry::load_from_env_or_default(
         config.skills_path.as_deref(),
     ));
     let data_sources = Arc::new(DataSourceManager::new());
-    let planner = build_bot_planner(config);
+    let planner = build_bot_planner(config, profile.clone());
 
     Ok(Arc::new(BotService::new(
         rag,
         skills,
         data_sources,
         planner,
+        profile,
     )))
 }
 
-fn build_bot_planner(config: &Config) -> Option<Arc<dyn BotPlanner>> {
+fn build_bot_planner(config: &Config, profile: Arc<BotProfile>) -> Option<Arc<dyn BotPlanner>> {
     match config.llm_provider {
         LlmProvider::OpenAiCompatible | LlmProvider::Custom
             if is_chat_completions_usable(config) =>
@@ -64,6 +70,7 @@ fn build_bot_planner(config: &Config) -> Option<Arc<dyn BotPlanner>> {
             );
             Some(Arc::new(ChatCompletionsBotPlanner::new(
                 config.chat_completions.clone(),
+                profile,
             )))
         }
         LlmProvider::Claude if is_claude_messages_usable(config) => {
@@ -73,6 +80,7 @@ fn build_bot_planner(config: &Config) -> Option<Arc<dyn BotPlanner>> {
             );
             Some(Arc::new(ClaudeMessagesBotPlanner::new(
                 config.claude.clone(),
+                profile,
             )))
         }
         _ => {
@@ -282,6 +290,7 @@ mod tests {
             },
             claude: test_claude_config(None, false),
             skills_path: None,
+            bot_config_path: None,
         };
 
         build_rag_service(&config).expect("service should fall back to traditional RAG");
@@ -315,6 +324,7 @@ mod tests {
             },
             claude: test_claude_config(None, false),
             skills_path: None,
+            bot_config_path: None,
         };
 
         build_rag_service(&config).expect("custom local provider should be accepted");
@@ -338,6 +348,7 @@ mod tests {
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),
             skills_path: None,
+            bot_config_path: None,
         };
 
         build_rag_service(&config).expect("service should fall back to traditional RAG");
@@ -436,6 +447,7 @@ mod tests {
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),
             skills_path: None,
+            bot_config_path: None,
         }
     }
 

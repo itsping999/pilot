@@ -739,6 +739,7 @@ mod tests {
             },
             rate_limit_rpm: 1,
             skills_path: None,
+            bot_config_path: None,
         }
     }
 }

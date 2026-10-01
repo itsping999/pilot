@@ -61,6 +61,79 @@ pub enum BotAction {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotProfile {
+    #[serde(default = "default_bot_name")]
+    pub bot_name: String,
+    #[serde(default = "default_greeting_reply")]
+    pub greeting_reply: String,
+    #[serde(default)]
+    pub extra_capabilities: Vec<String>,
+    #[serde(default = "default_example_queries")]
+    pub example_queries: Vec<String>,
+}
+
+fn default_bot_name() -> String {
+    "企业平台智能助手".to_string()
+}
+
+fn default_greeting_reply() -> String {
+    "您好！我一直在线，随时为您服务。\n您可以向我咨询平台使用方法与规范，或查询系统实时运行数据。请告诉我您需要什么帮助！".to_string()
+}
+
+fn default_example_queries() -> Vec<String> {
+    vec![
+        "查一下微服务 auth-service 最近的指标".to_string(),
+        "查询用户 1001 的基本信息".to_string(),
+        "企业 API 安全管理规范是什么？".to_string(),
+    ]
+}
+
+impl Default for BotProfile {
+    fn default() -> Self {
+        Self {
+            bot_name: default_bot_name(),
+            greeting_reply: default_greeting_reply(),
+            extra_capabilities: Vec::new(),
+            example_queries: default_example_queries(),
+        }
+    }
+}
+
+impl BotProfile {
+    pub fn load_from_path_or_default(path: Option<&std::path::Path>) -> Self {
+        if let Some(p) = path {
+            if p.exists() {
+                match std::fs::read_to_string(p) {
+                    Ok(content) => match serde_json::from_str::<BotProfile>(&content) {
+                        Ok(profile) => {
+                            info!("Loaded bot profile from {}", p.display());
+                            return profile;
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse bot profile from {}: {e}", p.display());
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Failed to read bot profile from {}: {e}", p.display());
+                    }
+                }
+            }
+        } else {
+            let default_path = std::path::Path::new("./config/bot.json");
+            if default_path.exists()
+                && let Ok(content) = std::fs::read_to_string(default_path)
+                && let Ok(profile) = serde_json::from_str::<BotProfile>(&content)
+            {
+                info!("Loaded default bot profile from ./config/bot.json");
+                return profile;
+            }
+        }
+
+        BotProfile::default()
+    }
+}
+
 pub trait BotPlanner: Send + Sync {
     fn plan(&self, message: &str, skills: &[&SqlSkill]) -> Result<BotAction, AgentError>;
 }
@@ -68,20 +141,22 @@ pub trait BotPlanner: Send + Sync {
 pub struct ChatCompletionsBotPlanner {
     config: ChatCompletionsProviderConfig,
     client: reqwest::blocking::Client,
+    profile: Arc<BotProfile>,
 }
 
 impl ChatCompletionsBotPlanner {
-    pub fn new(config: ChatCompletionsProviderConfig) -> Self {
+    pub fn new(config: ChatCompletionsProviderConfig, profile: Arc<BotProfile>) -> Self {
         Self {
             config,
             client: reqwest::blocking::Client::new(),
+            profile,
         }
     }
 }
 
 impl BotPlanner for ChatCompletionsBotPlanner {
     fn plan(&self, message: &str, skills: &[&SqlSkill]) -> Result<BotAction, AgentError> {
-        let system_prompt = build_bot_system_prompt(skills);
+        let system_prompt = build_bot_system_prompt(skills, &self.profile);
         let mut request = self
             .client
             .post(self.config.endpoint_url())
@@ -125,20 +200,22 @@ impl BotPlanner for ChatCompletionsBotPlanner {
 pub struct ClaudeMessagesBotPlanner {
     config: ClaudeMessagesProviderConfig,
     client: reqwest::blocking::Client,
+    profile: Arc<BotProfile>,
 }
 
 impl ClaudeMessagesBotPlanner {
-    pub fn new(config: ClaudeMessagesProviderConfig) -> Self {
+    pub fn new(config: ClaudeMessagesProviderConfig, profile: Arc<BotProfile>) -> Self {
         Self {
             config,
             client: reqwest::blocking::Client::new(),
+            profile,
         }
     }
 }
 
 impl BotPlanner for ClaudeMessagesBotPlanner {
     fn plan(&self, message: &str, skills: &[&SqlSkill]) -> Result<BotAction, AgentError> {
-        let system_prompt = build_bot_system_prompt(skills);
+        let system_prompt = build_bot_system_prompt(skills, &self.profile);
         let mut request = self
             .client
             .post(self.config.endpoint_url())
@@ -183,7 +260,7 @@ impl BotPlanner for ClaudeMessagesBotPlanner {
     }
 }
 
-fn build_bot_system_prompt(skills: &[&SqlSkill]) -> String {
+fn build_bot_system_prompt(skills: &[&SqlSkill], profile: &BotProfile) -> String {
     let mut skills_text = String::new();
     if skills.is_empty() {
         skills_text.push_str("（当前暂未配置任何 SQL 技能）\n");
@@ -203,11 +280,16 @@ fn build_bot_system_prompt(skills: &[&SqlSkill]) -> String {
         }
     }
 
-    format!(
-        r#"你是企业内部智能平台服务机器人。你拥有两大能力：
-1. 平台文档与知识库问答 (RAG)：回答平台使用方法、架构规范、开发指南、FAQ、流程与政策。
-2. 预定义业务数据查询技能 (SQL Skills)：调用预设模板查询实时平台数据（如用户状态、服务指标、订单数据等）。
+    let mut extra_caps = String::new();
+    for extra in &profile.extra_capabilities {
+        extra_caps.push_str(&format!("- 扩展能力/支持渠道: {}\n", extra));
+    }
 
+    format!(
+        r#"你是{bot_name}。你拥有以下核心能力：
+1. 平台文档与知识库问答 (RAG)：回答平台使用方法、架构规范、开发指南、FAQ、流程与政策。
+2. 预定义业务数据查询技能 (SQL Skills)：调用预设模板查询实时平台数据（如用户状态、服务指标、告警通知等）。
+{extra_caps}
 可用技能列表：
 {skills_text}
 
@@ -216,10 +298,16 @@ fn build_bot_system_prompt(skills: &[&SqlSkill]) -> String {
   {{"action":"skill","skill_name":"<技能名>","parameters":{{"<参数名>":<提取值>}}}}
 - 如果用户意图是询问平台使用方法、概念、流程、常见问题或未匹配到数据技能，返回 JSON:
   {{"action":"rag","query":"<提取并优化后的检索关键词>"}}
-- 如果用户输入为简单问候（如“你好”、“在吗”）、功能咨询（“你能做什么”、“你现在知道什么”）、能力介绍或无须查询的闲聊，返回 JSON:
-  {{"action":"direct","response":"<礼貌热情地回答用户并简述你的两大能力>"}}
+- 如果用户输入为简单打招呼、在吗、在线确认或寒暄（如“在？”、“你好”），返回 JSON:
+  {{"action":"direct","response":"{greeting}"}}
+- 如果用户输入为功能咨询（“你能做什么”、“你现在知道什么”）、能力介绍，返回 JSON:
+  {{"action":"direct","response":""}}
 
-必须严格仅返回一个合法 JSON 对象，不要输出 markdown 代码块标记，不要包含其他文字。"#
+必须严格仅返回一个合法 JSON 对象，不要输出 markdown 代码块标记，不要包含其他文字。"#,
+        bot_name = profile.bot_name,
+        extra_caps = extra_caps,
+        skills_text = skills_text,
+        greeting = profile.greeting_reply.replace('\n', " ")
     )
 }
 
@@ -230,21 +318,85 @@ fn parse_bot_action(content: &str) -> Result<BotAction, AgentError> {
     serde_json::from_str(json_str).map_err(|e| AgentError::InvalidPlan(format!("{e}: {json_str}")))
 }
 
-fn is_capabilities_or_greeting_query(text: &str) -> bool {
-    let trimmed = text.trim();
-    let lower = trimmed.to_lowercase();
-    let exact_greetings = ["你好", "您好", "hello", "hi", "在吗", "帮助", "help"];
-    if exact_greetings.iter().any(|&g| {
-        lower == g
-            || lower == format!("{g}呀")
-            || lower == format!("{g}啊")
-            || lower == format!("{g}！")
-            || lower == format!("{g}!")
-    }) {
-        return true;
-    }
+pub fn is_cjk_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '？' | '?'
+            | '！'
+            | '!'
+            | '，'
+            | ','
+            | '。'
+            | '.'
+            | '、'
+            | '；'
+            | ';'
+            | '：'
+            | ':'
+            | '~'
+            | '～'
+            | '…'
+            | '·'
+            | '"'
+            | '\''
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+            | '（'
+            | '）'
+            | '('
+            | ')'
+            | '【'
+            | '】'
+            | '['
+            | ']'
+            | '《'
+            | '》'
+            | '<'
+            | '>'
+    )
+}
 
-    let capability_patterns = [
+pub fn strip_punctuation_and_whitespace(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation() && !is_cjk_punctuation(*c))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn is_presence_or_greeting_query(clean: &str) -> bool {
+    let greetings = [
+        "在",
+        "在吗",
+        "在么",
+        "在不在",
+        "在不",
+        "有人吗",
+        "有人在吗",
+        "你好",
+        "您好",
+        "hello",
+        "hi",
+        "hey",
+        "哈喽",
+        "嗨",
+        "早",
+        "早上好",
+        "下午好",
+        "晚上好",
+        "喂",
+        "歪",
+        "你好呀",
+        "您好呀",
+        "在呀",
+        "在呢",
+    ];
+    greetings.contains(&clean)
+}
+
+fn is_capabilities_query(clean: &str) -> bool {
+    let patterns = [
         "知道什么",
         "知道些什么",
         "懂什么",
@@ -265,19 +417,35 @@ fn is_capabilities_or_greeting_query(text: &str) -> bool {
         "你是什么",
         "你的功能",
         "使用帮助",
+        "帮助",
+        "help",
     ];
-
-    capability_patterns
-        .iter()
-        .any(|&pattern| lower.contains(pattern))
+    patterns.iter().any(|&p| clean.contains(p))
 }
 
 /// Fallback rule-based router when LLM is unavailable or in extractive mode
-pub fn rule_based_route(message: &str, skills: &[&SqlSkill]) -> BotAction {
+pub fn rule_based_route(message: &str, skills: &[&SqlSkill], profile: &BotProfile) -> BotAction {
     let trimmed = message.trim();
+    let clean = strip_punctuation_and_whitespace(trimmed);
 
-    // Check greetings / bot capabilities query
-    if is_capabilities_or_greeting_query(trimmed) {
+    // 1. Empty or pure punctuation
+    if clean.is_empty() {
+        return BotAction::Direct {
+            response:
+                "您好！请问有什么我可以帮您？您可以向我提问平台使用方法，或查询系统实时业务数据。"
+                    .to_string(),
+        };
+    }
+
+    // 2. Presence or casual greeting query (e.g. "在？", "在吗", "你好", "有人在吗")
+    if is_presence_or_greeting_query(&clean) {
+        return BotAction::Direct {
+            response: profile.greeting_reply.clone(),
+        };
+    }
+
+    // 3. Capabilities / Bot Help query (e.g. "你现在知道什么？", "你能查什么？", "技能列表")
+    if is_capabilities_query(&clean) {
         return BotAction::Direct {
             response: String::new(),
         };
@@ -372,6 +540,7 @@ pub struct BotService {
     skills: Arc<SqlSkillRegistry>,
     data_sources: Arc<DataSourceManager>,
     planner: Option<Arc<dyn BotPlanner>>,
+    profile: Arc<BotProfile>,
 }
 
 impl BotService {
@@ -380,12 +549,14 @@ impl BotService {
         skills: Arc<SqlSkillRegistry>,
         data_sources: Arc<DataSourceManager>,
         planner: Option<Arc<dyn BotPlanner>>,
+        profile: Arc<BotProfile>,
     ) -> Self {
         Self {
             rag,
             skills,
             data_sources,
             planner,
+            profile,
         }
     }
 
@@ -428,7 +599,10 @@ impl BotService {
     pub fn build_capabilities_overview(&self) -> String {
         let skills = self.skills.list();
         let mut text = String::new();
-        text.push_str("您好！我是企业平台内部智能助手。目前我掌握以下两类核心能力：\n\n");
+        text.push_str(&format!(
+            "您好！我是{}。目前我掌握以下核心能力：\n\n",
+            self.profile.bot_name
+        ));
 
         text.push_str("📊 **实时数据查询技能（SQL Skills）**：\n");
         if skills.is_empty() {
@@ -455,10 +629,17 @@ impl BotService {
             }
         }
 
+        if !self.profile.extra_capabilities.is_empty() {
+            text.push_str("\n🛠️ **其他扩展能力与支持**：\n");
+            for extra in &self.profile.extra_capabilities {
+                text.push_str(&format!("- {}\n", extra));
+            }
+        }
+
         text.push_str("\n💡 **您可以直接向我提问，例如**：\n");
-        text.push_str("- “查一下微服务 auth-service 最近的指标”\n");
-        text.push_str("- “查询用户 1001 的基本信息”\n");
-        text.push_str("- “企业 API 安全管理规范是什么？”\n");
+        for eg in &self.profile.example_queries {
+            text.push_str(&format!("- “{}”\n", eg));
+        }
 
         text
     }
@@ -475,11 +656,11 @@ impl BotService {
                 Ok(act) => act,
                 Err(err) => {
                     warn!("LLM bot planning failed, falling back to rule-based: {err}");
-                    rule_based_route(message, &available_skills)
+                    rule_based_route(message, &available_skills, &self.profile)
                 }
             }
         } else {
-            rule_based_route(message, &available_skills)
+            rule_based_route(message, &available_skills, &self.profile)
         };
 
         match action {
@@ -571,11 +752,11 @@ impl BotService {
                 Ok(act) => act,
                 Err(err) => {
                     warn!("LLM bot planning failed in stream, falling back to rule-based: {err}");
-                    rule_based_route(message, &available_skills)
+                    rule_based_route(message, &available_skills, &self.profile)
                 }
             }
         } else {
-            rule_based_route(message, &available_skills)
+            rule_based_route(message, &available_skills, &self.profile)
         };
 
         match action {
@@ -752,24 +933,66 @@ mod tests {
 
     #[test]
     fn test_rule_based_greeting() {
-        let action = rule_based_route("你好", &[]);
+        let profile = BotProfile::default();
+        let action = rule_based_route("你好", &[], &profile);
         match action {
-            BotAction::Direct { response: _ } => {}
-            _ => panic!("Expected Direct action"),
+            BotAction::Direct { response } => {
+                assert_eq!(response, profile.greeting_reply);
+            }
+            _ => panic!("Expected Direct action for greeting"),
+        }
+    }
+
+    #[test]
+    fn test_rule_based_presence_query() {
+        let profile = BotProfile::default();
+        for query in [
+            "在？",
+            "在?",
+            "在",
+            "在吗",
+            "在不在？",
+            "有人在吗？",
+            "hi",
+            "哈喽~",
+        ] {
+            let action = rule_based_route(query, &[], &profile);
+            match action {
+                BotAction::Direct { response } => {
+                    assert_eq!(response, profile.greeting_reply, "Query: {query}");
+                }
+                _ => panic!("Expected Direct action for presence query: {query}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_rule_based_pure_punctuation() {
+        let profile = BotProfile::default();
+        let action = rule_based_route("？？？", &[], &profile);
+        match action {
+            BotAction::Direct { response } => {
+                assert!(response.contains("请问有什么我可以帮您"));
+            }
+            _ => panic!("Expected Direct prompt action for pure punctuation"),
         }
     }
 
     #[test]
     fn test_rule_based_capabilities_query() {
-        let action = rule_based_route("你现在知道什么？", &[]);
+        let profile = BotProfile::default();
+        let action = rule_based_route("你现在知道什么？", &[], &profile);
         match action {
-            BotAction::Direct { response: _ } => {}
+            BotAction::Direct { response } => {
+                assert!(response.is_empty());
+            }
             _ => panic!("Expected Direct action for capabilities query"),
         }
     }
 
     #[test]
     fn test_rule_based_skill_match() {
+        let profile = BotProfile::default();
         let skill = SqlSkill {
             name: "query_user_orders".to_string(),
             description: "查询用户订单".to_string(),
@@ -786,7 +1009,7 @@ mod tests {
             max_rows: Some(10),
         };
 
-        let action = rule_based_route("帮我查一下用户 2005 的订单记录", &[&skill]);
+        let action = rule_based_route("帮我查一下用户 2005 的订单记录", &[&skill], &profile);
         match action {
             BotAction::Skill {
                 skill_name,
