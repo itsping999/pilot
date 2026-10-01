@@ -337,7 +337,7 @@ fn parse_planner_response(content: &str) -> Result<PlannerResponse, AgentError> 
     serde_json::from_str(json).map_err(|error| AgentError::InvalidPlan(error.to_string()))
 }
 
-fn extract_json_object(content: &str) -> Option<&str> {
+pub fn extract_json_object(content: &str) -> Option<&str> {
     let trimmed = content.trim();
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         return Some(trimmed);

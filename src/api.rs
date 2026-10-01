@@ -10,10 +10,12 @@ use futures::stream::Stream;
 use log::info;
 use std::convert::Infallible;
 
+use crate::bot::BotService;
 use crate::contracts::{
-    CreateDocumentRequest, CreateDocumentResponse, DeleteDocumentResponse, HealthDetailResponse,
-    HealthResponse, ListChunksResponse, ListDocumentsResponse, ListQueryHistoryResponse,
-    QueryHistoryParams, QueryRequest, UpdateDocumentRequest,
+    BotChatRequest, BotChatResponse, CreateDocumentRequest, CreateDocumentResponse,
+    DeleteDocumentResponse, HealthDetailResponse, HealthResponse, ListChunksResponse,
+    ListDocumentsResponse, ListQueryHistoryResponse, ListSkillsResponse, QueryHistoryParams,
+    QueryRequest, TestSkillRequest, UpdateDocumentRequest,
 };
 use crate::http::{ApiError, ApiResponse};
 use crate::ingestion::document_title_from_text;
@@ -22,16 +24,19 @@ use crate::middleware::{
 };
 use crate::models::{Document, RagResponse, default_access_scope, normalize_access_scope};
 use crate::rag::RagService;
+use crate::skills::QueryResult;
 use crate::ui;
 
 #[derive(Clone)]
 pub struct AppState {
     rag: Arc<RagService>,
+    bot: Arc<BotService>,
     api_token: Option<Arc<str>>,
 }
 
 pub fn build_router(
     rag: Arc<RagService>,
+    bot: Arc<BotService>,
     ui_enabled: bool,
     request_body_limit_bytes: usize,
     api_token: Option<String>,
@@ -40,6 +45,7 @@ pub fn build_router(
     let rate_limiter = Arc::new(RateLimiter::new(requests_per_minute));
     let state = AppState {
         rag,
+        bot,
         api_token: api_token.map(Arc::from),
     };
     let api_routes = Router::new()
@@ -57,6 +63,10 @@ pub fn build_router(
         .route("/rag/query", post(query_rag))
         .route("/rag/query/stream", post(query_rag_stream))
         .route("/rag/history", get(list_query_history))
+        .route("/bot/chat", post(chat_bot))
+        .route("/bot/chat/stream", post(chat_bot_stream))
+        .route("/skills", get(list_skills))
+        .route("/skills/test", post(test_skill))
         .layer(DefaultBodyLimit::max(request_body_limit_bytes));
 
     let app = if ui_enabled {
@@ -436,6 +446,106 @@ async fn query_rag_stream(
     Ok(Sse::new(stream))
 }
 
+async fn chat_bot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<BotChatRequest>,
+) -> ApiResult<BotChatResponse> {
+    require_auth(&state, &headers)?;
+    let message = clean_required(request.message, "message")?;
+    let top_k = request.top_k.unwrap_or(5).clamp(1, 20);
+    let mut access_scopes = request.access_scopes;
+    if let Some(access_scope) = request.access_scope
+        && let Some(access_scope) = normalize_access_scope(&access_scope)
+    {
+        access_scopes.push(access_scope);
+    }
+    let bot = state.bot.clone();
+    let response = run_blocking(move || bot.chat(&message, top_k, &access_scopes)).await?;
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn chat_bot_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<BotChatRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    require_auth(&state, &headers)?;
+    let message = clean_required(request.message, "message")?;
+    let top_k = request.top_k.unwrap_or(5).clamp(1, 20);
+    let mut access_scopes = request.access_scopes;
+    if let Some(access_scope) = request.access_scope
+        && let Some(access_scope) = normalize_access_scope(&access_scope)
+    {
+        access_scopes.push(access_scope);
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(64);
+    let bot = state.bot.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let sender = tx.clone();
+        let result = bot.chat_stream(&message, top_k, &access_scopes, |event_json| {
+            if sender
+                .blocking_send(Event::default().data(event_json))
+                .is_err()
+            {
+                return Err(crate::bot::BotError::Internal("client disconnected".into()));
+            }
+            Ok(())
+        });
+
+        match result {
+            Ok(_) => {
+                let _ = tx.blocking_send(Event::default().data(r#"{"type":"done"}"#));
+            }
+            Err(err) => {
+                let err_msg = serde_json::json!({
+                    "type": "error",
+                    "content": err.to_string()
+                });
+                let _ = tx.blocking_send(Event::default().data(err_msg.to_string()));
+                let _ = tx.blocking_send(Event::default().data(r#"{"type":"done"}"#));
+            }
+        }
+    });
+
+    let stream = async_stream::stream! {
+        while let Some(event) = rx.recv().await {
+            yield Ok(event);
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+async fn list_skills(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ListSkillsResponse> {
+    require_auth(&state, &headers)?;
+    let bot = state.bot.clone();
+    let skills = run_blocking(move || Ok::<_, ApiError>(bot.list_skills())).await?;
+    Ok(Json(ApiResponse::ok(ListSkillsResponse { skills })))
+}
+
+async fn test_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TestSkillRequest>,
+) -> ApiResult<QueryResult> {
+    require_auth(&state, &headers)?;
+    let skill_name = clean_required(request.skill_name, "skill_name")?;
+    let bot = state.bot.clone();
+    let params = request.parameters;
+    let result = run_blocking(move || {
+        bot.test_skill(&skill_name, &params)
+            .map_err(|e| ApiError::bad_request(e.to_string()))
+    })
+    .await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
 async fn run_blocking<T, E, F>(operation: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
@@ -500,7 +610,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::build_router;
-    use crate::app::build_rag_service;
+    use crate::app::{build_bot_service, build_rag_service};
     use crate::config::{
         ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig, Config, EmbeddingProvider,
         EmbeddingProviderConfig, LlmProvider, RagMode,
@@ -509,9 +619,10 @@ mod tests {
     #[tokio::test]
     async fn rate_limited_responses_keep_cors_and_request_id_headers() {
         let dir = tempdir().expect("create temp dir");
-        let rag = build_rag_service(&test_config(dir.path().join("knowledge-pilot.db")))
-            .expect("build test rag service");
-        let app = build_router(rag, false, 1024 * 1024, None, 1);
+        let cfg = test_config(dir.path().join("knowledge-pilot.db"));
+        let rag = build_rag_service(&cfg).expect("build test rag service");
+        let bot = build_bot_service(&cfg, rag.clone()).expect("build test bot service");
+        let app = build_router(rag, bot, false, 1024 * 1024, None, 1);
 
         let first = app
             .clone()
@@ -546,9 +657,10 @@ mod tests {
     #[tokio::test]
     async fn successful_cors_responses_include_origin_vary_header() {
         let dir = tempdir().expect("create temp dir");
-        let rag = build_rag_service(&test_config(dir.path().join("knowledge-pilot.db")))
-            .expect("build test rag service");
-        let app = build_router(rag, false, 1024 * 1024, None, 300);
+        let cfg = test_config(dir.path().join("knowledge-pilot.db"));
+        let rag = build_rag_service(&cfg).expect("build test rag service");
+        let bot = build_bot_service(&cfg, rag.clone()).expect("build test bot service");
+        let app = build_router(rag, bot, false, 1024 * 1024, None, 300);
 
         let response = app
             .oneshot(
@@ -626,6 +738,7 @@ mod tests {
                 extra_headers: Vec::new(),
             },
             rate_limit_rpm: 1,
+            skills_path: None,
         }
     }
 }

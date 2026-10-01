@@ -922,10 +922,10 @@
     var loadingMsg = showLoading();
 
     try {
-      var res = await fetch("/rag/query/stream", {
+      var res = await fetch("/bot/chat/stream", {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ question: question, top_k: 5 }),
+        body: JSON.stringify({ message: question, top_k: 5 }),
       });
 
       if (!res.ok) {
@@ -940,6 +940,16 @@
       msg.classList.add("typing");
       bubble.textContent = "";
       loadingMsg.remove();
+
+      var badgeEl = document.createElement("div");
+      badgeEl.className = "bot-action-badge";
+      badgeEl.style.fontSize = "0.75rem";
+      badgeEl.style.opacity = "0.75";
+      badgeEl.style.marginBottom = "4px";
+      bubble.appendChild(badgeEl);
+
+      var textEl = document.createElement("div");
+      bubble.appendChild(textEl);
 
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
@@ -961,10 +971,16 @@
           var jsonStr = line.slice(6);
           try {
             var event = JSON.parse(jsonStr);
-            if (event.type === "metadata") {
+            if (event.type === "action") {
+              if (event.action === "skill") {
+                badgeEl.textContent = "⚡ 执行数据技能: " + (event.skill_name || "");
+              } else if (event.action === "rag") {
+                badgeEl.textContent = "📖 知识库检索";
+              }
+            } else if (event.type === "metadata") {
               metadata = event;
             } else if (event.type === "token") {
-              bubble.textContent += event.content;
+              textEl.textContent += event.content;
               chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (event.type === "done") {
               // Stream complete

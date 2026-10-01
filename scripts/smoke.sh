@@ -19,6 +19,9 @@ cleanup() {
 trap cleanup EXIT
 
 rm -f "$DB_PATH" "$DB_PATH-shm" "$DB_PATH-wal"
+BIZ_DB_PATH="/tmp/kp-smoke-biz.db"
+SKILLS_PATH="/tmp/kp-smoke-skills.json"
+rm -f "$BIZ_DB_PATH" "$SKILLS_PATH"
 
 if [[ -z "$CUSTOM_BIN" ]]; then
   cargo build
@@ -26,9 +29,34 @@ elif [[ ! -x "$BIN" ]]; then
   cargo build
 fi
 
+sqlite3 "$BIZ_DB_PATH" "CREATE TABLE service_metrics (service_name TEXT, qps INTEGER, status TEXT); INSERT INTO service_metrics VALUES ('user-service', 1250, 'healthy');"
+
+cat <<'EOF' > "$SKILLS_PATH"
+[
+  {
+    "name": "query_service_metrics",
+    "description": "查询微服务的性能指标与健康状态",
+    "connection_ref": "SMOKE",
+    "sql_template": "SELECT service_name, qps, status FROM service_metrics WHERE service_name = :service_name",
+    "parameters": [
+      {
+        "name": "service_name",
+        "param_type": "string",
+        "description": "微服务名称",
+        "required": true,
+        "default": "user-service"
+      }
+    ],
+    "keywords": ["指标", "qps", "service_metrics", "metrics"]
+  }
+]
+EOF
+
 KNOWLEDGE_PILOT_ADDR="$ADDR" \
 KNOWLEDGE_PILOT_DB_PATH="$DB_PATH" \
 KNOWLEDGE_PILOT_API_TOKEN="$TOKEN" \
+KNOWLEDGE_PILOT_SKILLS_PATH="$SKILLS_PATH" \
+KP_DB_SMOKE="sqlite://$BIZ_DB_PATH" \
 RUST_LOG=info \
 "$BIN" >/tmp/knowledge-pilot-smoke.log 2>&1 &
 SERVER_PID="$!"
@@ -102,5 +130,49 @@ grep -q '"question":"What does KnowledgePilot smoke test?' /tmp/kp-smoke-history
 
 curl -fsS -X DELETE -H "$AUTH_HEADER" "$BASE_URL/documents/smoke-json" >/tmp/kp-smoke-delete.json
 grep -q '"code":"ok"' /tmp/kp-smoke-delete.json
+
+# Test Skills API
+curl -fsS -H "$AUTH_HEADER" "$BASE_URL/skills" >/tmp/kp-smoke-skills-list.json
+grep -q '"code":"ok"' /tmp/kp-smoke-skills-list.json
+grep -q '"query_service_metrics"' /tmp/kp-smoke-skills-list.json
+
+curl -fsS \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"skill_name":"query_service_metrics","parameters":{"service_name":"user-service"}}' \
+  "$BASE_URL/skills/test" >/tmp/kp-smoke-skill-test.json
+grep -q '"code":"ok"' /tmp/kp-smoke-skill-test.json
+grep -q '"service_name":"user-service"' /tmp/kp-smoke-skill-test.json
+grep -q '"qps":1250' /tmp/kp-smoke-skill-test.json
+
+# Test Bot Direct Greeting
+curl -fsS \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"message":"你好"}' \
+  "$BASE_URL/bot/chat" >/tmp/kp-smoke-bot-direct.json
+grep -q '"code":"ok"' /tmp/kp-smoke-bot-direct.json
+grep -q '"action_taken":"direct"' /tmp/kp-smoke-bot-direct.json
+
+# Test Bot Skill Execution
+curl -fsS \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"message":"查询服务指标"}' \
+  "$BASE_URL/bot/chat" >/tmp/kp-smoke-bot-skill.json
+grep -q '"code":"ok"' /tmp/kp-smoke-bot-skill.json
+grep -q '"action_taken":"skill"' /tmp/kp-smoke-bot-skill.json
+grep -q '"skill_used":"query_service_metrics"' /tmp/kp-smoke-bot-skill.json
+grep -q 'user-service' /tmp/kp-smoke-bot-skill.json
+
+# Test Bot Streaming
+curl -fsS \
+  -H "$AUTH_HEADER" \
+  -H 'content-type: application/json' \
+  -d '{"message":"查询服务指标"}' \
+  "$BASE_URL/bot/chat/stream" >/tmp/kp-smoke-bot-stream.txt
+grep -q '"action":"skill"' /tmp/kp-smoke-bot-stream.txt
+grep -q '"type":"data"' /tmp/kp-smoke-bot-stream.txt
+grep -q '"type":"done"' /tmp/kp-smoke-bot-stream.txt
 
 echo "smoke_result ok"

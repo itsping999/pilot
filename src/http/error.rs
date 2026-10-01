@@ -194,6 +194,16 @@ impl From<RagError> for ApiError {
     }
 }
 
+impl From<crate::bot::BotError> for ApiError {
+    fn from(error: crate::bot::BotError) -> Self {
+        match error {
+            crate::bot::BotError::Rag(err) => err.into(),
+            crate::bot::BotError::Skill(err) => ApiError::bad_request(err.to_string()),
+            crate::bot::BotError::Internal(msg) => ApiError::internal(msg),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IntoResponse — serialize as { "code": "...", "message": "..." }
 // ---------------------------------------------------------------------------

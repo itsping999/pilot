@@ -18,6 +18,7 @@ pub struct Config {
     pub chat_completions: ChatCompletionsProviderConfig,
     pub claude: ClaudeMessagesProviderConfig,
     pub rate_limit_rpm: u32,
+    pub skills_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +139,11 @@ impl Config {
             .filter(|value| *value > 0)
             .unwrap_or(300);
 
+        let skills_path = env::var("KNOWLEDGE_PILOT_SKILLS_PATH")
+            .ok()
+            .and_then(clean_env_string)
+            .map(PathBuf::from);
+
         Self {
             addr,
             db_path,
@@ -152,6 +158,7 @@ impl Config {
             chat_completions,
             claude,
             rate_limit_rpm,
+            skills_path,
         }
     }
 }

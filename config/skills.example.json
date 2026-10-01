@@ -1,0 +1,64 @@
+[
+  {
+    "name": "query_user_info",
+    "description": "查询企业平台用户基本信息、账户状态、所属部门和创建时间",
+    "connection_ref": "PRIMARY",
+    "sql_template": "SELECT id, username, email, department, status, created_at FROM users WHERE id = :user_id OR username = :username LIMIT 1",
+    "parameters": [
+      {
+        "name": "user_id",
+        "param_type": "integer",
+        "description": "用户数字 ID",
+        "required": false
+      },
+      {
+        "name": "username",
+        "param_type": "string",
+        "description": "用户登录名或工号",
+        "required": false
+      }
+    ],
+    "keywords": ["用户", "账户", "账号", "用户信息", "user"],
+    "max_rows": 1
+  },
+  {
+    "name": "query_service_metrics",
+    "description": "查询微服务或模块的实时运行指标（QPS、错误率、平均延迟与健康状态）",
+    "connection_ref": "PRIMARY",
+    "sql_template": "SELECT service_name, qps, error_rate, latency_ms, status, updated_at FROM service_metrics WHERE service_name = :service_name ORDER BY updated_at DESC LIMIT :limit",
+    "parameters": [
+      {
+        "name": "service_name",
+        "param_type": "string",
+        "description": "微服务或系统模块名称（如 auth-service, order-api）",
+        "required": true
+      },
+      {
+        "name": "limit",
+        "param_type": "integer",
+        "description": "返回记录数量，默认 5 条",
+        "required": false,
+        "default": 5
+      }
+    ],
+    "keywords": ["指标", "qps", "错误率", "延迟", "服务状态", "metrics"],
+    "max_rows": 20
+  },
+  {
+    "name": "query_active_alerts",
+    "description": "查询平台当前未解决的告警与故障通知",
+    "connection_ref": "PRIMARY",
+    "sql_template": "SELECT alert_id, service_name, severity, summary, created_at FROM system_alerts WHERE status = 'firing' ORDER BY created_at DESC LIMIT :limit",
+    "parameters": [
+      {
+        "name": "limit",
+        "param_type": "integer",
+        "description": "最大告警返回条数，默认 10 条",
+        "required": false,
+        "default": 10
+      }
+    ],
+    "keywords": ["告警", "报警", "故障", "alerts", "异常"],
+    "max_rows": 50
+  }
+]

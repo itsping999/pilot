@@ -3,6 +3,7 @@ use std::sync::Arc;
 use log::{info, warn};
 
 use crate::agent::{ChatCompletionsPlanner, ClaudeMessagesPlanner, QueryPlanner};
+use crate::bot::{BotPlanner, BotService, ChatCompletionsBotPlanner, ClaudeMessagesBotPlanner};
 use crate::config::{Config, EmbeddingProvider, LlmProvider, RagMode};
 use crate::db::open_database;
 use crate::embedding::{Embedder, HashEmbedder, OllamaEmbedder};
@@ -11,6 +12,7 @@ use crate::generation::{
 };
 use crate::rag::RagService;
 use crate::retrieval::SqliteRetriever;
+use crate::skills::{DataSourceManager, SqlSkillRegistry};
 use crate::store::SqliteStore;
 
 pub fn build_rag_service(config: &Config) -> Result<Arc<RagService>, Box<dyn std::error::Error>> {
@@ -31,6 +33,53 @@ pub fn build_rag_service(config: &Config) -> Result<Arc<RagService>, Box<dyn std
         config.chunk_size,
         config.chunk_overlap,
     )))
+}
+
+pub fn build_bot_service(
+    config: &Config,
+    rag: Arc<RagService>,
+) -> Result<Arc<BotService>, Box<dyn std::error::Error>> {
+    let skills = Arc::new(SqlSkillRegistry::load_from_env_or_default(
+        config.skills_path.as_deref(),
+    ));
+    let data_sources = Arc::new(DataSourceManager::new());
+    let planner = build_bot_planner(config);
+
+    Ok(Arc::new(BotService::new(
+        rag,
+        skills,
+        data_sources,
+        planner,
+    )))
+}
+
+fn build_bot_planner(config: &Config) -> Option<Arc<dyn BotPlanner>> {
+    match config.llm_provider {
+        LlmProvider::OpenAiCompatible | LlmProvider::Custom
+            if is_chat_completions_usable(config) =>
+        {
+            info!(
+                "Bot planner enabled: provider={} model={}",
+                config.chat_completions.name, config.chat_completions.model
+            );
+            Some(Arc::new(ChatCompletionsBotPlanner::new(
+                config.chat_completions.clone(),
+            )))
+        }
+        LlmProvider::Claude if is_claude_messages_usable(config) => {
+            info!(
+                "Bot planner enabled: provider={} model={}",
+                config.claude.name, config.claude.model
+            );
+            Some(Arc::new(ClaudeMessagesBotPlanner::new(
+                config.claude.clone(),
+            )))
+        }
+        _ => {
+            info!("Bot planner: rule-based router (no external LLM planner configured)");
+            None
+        }
+    }
 }
 
 fn build_embedder(config: &Config) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
@@ -232,6 +281,7 @@ mod tests {
                 extra_headers: Vec::new(),
             },
             claude: test_claude_config(None, false),
+            skills_path: None,
         };
 
         build_rag_service(&config).expect("service should fall back to traditional RAG");
@@ -264,6 +314,7 @@ mod tests {
                 extra_headers: Vec::new(),
             },
             claude: test_claude_config(None, false),
+            skills_path: None,
         };
 
         build_rag_service(&config).expect("custom local provider should be accepted");
@@ -286,6 +337,7 @@ mod tests {
             llm_provider: LlmProvider::Claude,
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),
+            skills_path: None,
         };
 
         build_rag_service(&config).expect("service should fall back to traditional RAG");
@@ -383,6 +435,7 @@ mod tests {
             llm_provider: LlmProvider::Extractive,
             chat_completions: test_chat_config(None, false),
             claude: test_claude_config(None, false),
+            skills_path: None,
         }
     }
 

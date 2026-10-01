@@ -22,6 +22,8 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 - `src/retrieval.rs` - `Retriever` trait and current SQLite-backed in-process vector scan with lexical/title boosts.
 - `src/generation.rs` - `Generator` trait, extractive generator, OpenAI-compatible generator, Claude generator.
 - `src/agent.rs` - optional Agentic RAG query planning and follow-up planning.
+- `src/skills.rs` - predefined parameterized SQL skills, read-only SQL validation, MySQL & SQLite connection pooling.
+- `src/bot.rs` - unified platform assistant bot orchestrating RAG documentation Q&A and SQL skills execution.
 - `src/rag.rs` - pipeline orchestration, context expansion, confidence, citation filtering, history recording.
 - `src/ui.rs` and `static/` - embedded UI pages and assets; changes require rebuilding the Rust binary.
 - `eval/documents/` and `eval/cases.json` - quality gate corpus and cases, not human-facing project docs.
@@ -34,7 +36,7 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 | Human-facing docs | `README.md` | Keep operator behavior here; it can drift, so verify against source before copying commands. |
 | Agent-facing rules | `AGENTS.md` | Update when architecture, verification gates, deployment paths, or cross-file workflows change. |
 | Runtime config | `src/config.rs`, `.env.example` | The app reads environment variables directly; no `.env` loader exists. |
-| HTTP routes | `src/api.rs` | Current routes include `/health/detail`, `PUT /documents/{id}`, and `/rag/query/stream`. |
+| HTTP routes | `src/api.rs` | Current routes include `/health/detail`, `PUT /documents/{id}`, `/rag/query/stream`, `/bot/chat`, `/bot/chat/stream`, `/skills`. |
 | API DTOs | `src/contracts.rs`, `src/models.rs` | Keep JSON shape changes here, then adjust UI/smoke/eval if affected. |
 | Error envelope/codes | `src/http/error.rs`, `src/http/response.rs` | Successful API responses use `{code,message,data}`; errors use `{code,message}`. |
 | SQLite schema | `src/store.rs` | Existing migrations are additive `ALTER TABLE ... ADD COLUMN` checks; do not use external migration tooling unless requested. |
@@ -42,7 +44,7 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 | Eval gate | `eval/cases.json`, `eval/documents/` | Current fixture has 91 Markdown docs and 184 cases, including `eval/documents/diverse/`. |
 | Static UI | `static/index.html`, `static/qa.html`, `static/app.css`, `static/app.js`, `src/ui.rs` | UI is embedded with `include_str!`; rebuild before browser/smoke verification. |
 | Deployment | `Dockerfile`, `compose.yaml`, `deploy/systemd/knowledge-pilot.service`, `.github/workflows/ci.yml` | These files contain deploy-specific env overrides; inspect all of them when config changes. |
-| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, detailed health, JSON ingest/update, chunks, multipart upload, query, SSE stream, history, delete. |
+| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, detailed health, JSON ingest/update, chunks, multipart upload, query, SSE stream, history, delete, skills, bot chat. |
 
 ## Current API Surface
 
@@ -58,6 +60,10 @@ Protected by bearer auth when `KNOWLEDGE_PILOT_API_TOKEN` is set:
 - `POST /rag/query`
 - `POST /rag/query/stream`
 - `GET /rag/history`
+- `POST /bot/chat`
+- `POST /bot/chat/stream`
+- `GET /skills`
+- `POST /skills/test`
 
 Public/basic routes:
 
@@ -66,7 +72,7 @@ Public/basic routes:
 - `GET /`, `GET /upload`, `GET /qa`
 - `GET /static/app.css`, `GET /static/app.js`
 
-`/rag/query/stream` currently computes the full RAG response first, then emits metadata and character tokens as SSE. Treat it as a streaming presentation endpoint, not true incremental LLM streaming.
+`/rag/query/stream` and `/bot/chat/stream` emit incremental tokens and metadata as SSE events.
 
 ## Runtime Configuration
 

@@ -1,6 +1,7 @@
 mod agent;
 mod api;
 mod app;
+mod bot;
 mod commands;
 mod config;
 mod contracts;
@@ -13,13 +14,14 @@ mod middleware;
 mod models;
 mod rag;
 mod retrieval;
+mod skills;
 mod store;
 mod ui;
 
 use std::net::SocketAddr;
 
 use api::build_router;
-use app::build_rag_service;
+use app::{build_bot_service, build_rag_service};
 use config::Config;
 use log::{info, warn};
 
@@ -40,9 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env();
     let rag = build_rag_service(&config)?;
+    let bot = build_bot_service(&config, rag.clone())?;
 
     let app = build_router(
         rag,
+        bot,
         config.ui_enabled,
         config.request_body_limit_bytes,
         config.api_token.clone(),

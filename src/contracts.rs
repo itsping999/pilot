@@ -74,3 +74,38 @@ pub struct HealthDetailResponse {
     pub embedding_model: String,
     pub generator: String,
 }
+
+#[derive(Deserialize)]
+pub struct BotChatRequest {
+    pub message: String,
+    pub top_k: Option<usize>,
+    pub access_scope: Option<String>,
+    #[serde(default)]
+    pub access_scopes: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct BotChatResponse {
+    pub reply: String,
+    pub action_taken: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_used: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_data: Option<crate::skills::QueryResult>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<crate::models::Citation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<crate::models::AnswerConfidence>,
+}
+
+#[derive(Serialize)]
+pub struct ListSkillsResponse {
+    pub skills: Vec<crate::skills::SqlSkill>,
+}
+
+#[derive(Deserialize)]
+pub struct TestSkillRequest {
+    pub skill_name: String,
+    #[serde(default)]
+    pub parameters: std::collections::HashMap<String, serde_json::Value>,
+}

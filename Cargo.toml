@@ -15,6 +15,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 async-stream = "0.3"
 futures = "0.3"
+mysql = { version = "28.0", default-features = false, features = ["default-rust"] }
 
 [dev-dependencies]
 tempfile = "3"

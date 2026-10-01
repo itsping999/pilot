@@ -20,6 +20,8 @@ Human-facing project documentation is maintained in this `README.md`. Agent-faci
 - Protected query history API for lightweight audit review.
 - Permission-scoped retrieval with `public` as the default document scope.
 - Document management APIs for create, list, detail, chunks, and delete.
+- Enterprise platform assistant bot coordinating RAG documentation Q&A and live database SQL skills.
+- Predefined parameterized SQL skills with MySQL and SQLite connection pools and strict read-only safety.
 - Text file upload for `.md`, `.markdown`, and `.txt`.
 - Local ingest command for files and directories.
 - Separate upload and Q&A pages at `/upload` and `/qa`.
@@ -31,7 +33,7 @@ Human-facing project documentation is maintained in this `README.md`. Agent-faci
 ```text
 Rust 2024
 Axum
-SQLite / rusqlite
+SQLite / rusqlite & MySQL / mysql
 serde / serde_json
 log / env_logger
 Vanilla HTML/CSS/JS
@@ -121,6 +123,10 @@ DELETE /documents/{id}
 POST /rag/query
 POST /rag/query/stream
 GET /rag/history
+POST /bot/chat
+POST /bot/chat/stream
+GET /skills
+POST /skills/test
 GET /upload
 GET /qa
 ```
@@ -203,12 +209,98 @@ Errors use the same `code` and `message` shape:
 }
 ```
 
+## Enterprise Platform Assistant Bot & SQL Skills
+
+KnowledgePilot includes a unified intelligent assistant bot that blends **Platform Knowledge Base (RAG)** and **Live Enterprise Data Queries (Predefined SQL Skills)** in a single conversation flow (similar to intelligent customer service bots):
+
+- **Platform how-tos, manuals, policies, troubleshooting**: seamlessly handled by the embedded RAG engine.
+- **Real-time business data (user accounts, service metrics, alerts, orders)**: routed to predefined, parameterized SQL skills querying MySQL or SQLite.
+- **Safety**: SQL queries are strictly validated to be read-only (`SELECT`/`WITH`/`EXPLAIN`). All mutation statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc.) and multi-statement execution are rejected. Limit clauses are automatically bounded.
+
+### Database Credentials Configuration
+
+Connection strings are configured via environment variables matching `KP_DB_<CONNECTION_REF>`:
+
+```bash
+# MySQL for enterprise production
+export KP_DB_PRIMARY="mysql://user:password@127.0.0.1:3306/platform_db"
+export KP_DB_ANALYTICS="mysql://user:password@127.0.0.1:3306/analytics_db"
+
+# SQLite for local development or testing
+export KP_DB_LOCAL="sqlite://./data/business.db"
+```
+
+### Defining Skills (`config/skills.json`)
+
+Skills are defined in JSON (default path `./config/skills.json` or configured via `KNOWLEDGE_PILOT_SKILLS_PATH`). See [`config/skills.example.json`](config/skills.example.json) for a complete template:
+
+```json
+[
+  {
+    "name": "query_user_info",
+    "description": "查询企业平台用户基本信息、账户状态与部门",
+    "connection_ref": "PRIMARY",
+    "sql_template": "SELECT id, username, email, department, status FROM users WHERE id = :user_id OR username = :username LIMIT 1",
+    "parameters": [
+      {
+        "name": "user_id",
+        "param_type": "integer",
+        "description": "用户数字 ID",
+        "required": false
+      },
+      {
+        "name": "username",
+        "param_type": "string",
+        "description": "用户登录名",
+        "required": false
+      }
+    ],
+    "keywords": ["用户", "账号", "user"]
+  }
+]
+```
+
+### Bot API Examples
+
+Chat with the bot (JSON or streaming):
+
+```bash
+# Ask how to use the platform -> Bot routes to RAG
+curl -s -X POST http://127.0.0.1:8080/bot/chat \
+  -H 'content-type: application/json' \
+  -d '{"message": "如何配置平台的告警规则？"}'
+
+# Query live data -> Bot extracts parameters and executes SQL skill
+curl -s -X POST http://127.0.0.1:8080/bot/chat \
+  -H 'content-type: application/json' \
+  -d '{"message": "查询用户 1001 的基本信息"}'
+
+# SSE real-time streaming
+curl -s -N -X POST http://127.0.0.1:8080/bot/chat/stream \
+  -H 'content-type: application/json' \
+  -d '{"message": "查询服务 auth-service 最近的指标"}'
+```
+
+List and test skills directly:
+
+```bash
+# List available skills
+curl -s http://127.0.0.1:8080/skills
+
+# Test skill execution
+curl -s -X POST http://127.0.0.1:8080/skills/test \
+  -H 'content-type: application/json' \
+  -d '{"skill_name": "query_user_info", "parameters": {"user_id": 1001}}'
+```
+
 ## Configuration
 
 ```text
 KNOWLEDGE_PILOT_ADDR=127.0.0.1:8080
 KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db
 KNOWLEDGE_PILOT_API_TOKEN=
+KNOWLEDGE_PILOT_SKILLS_PATH=./config/skills.json
+KP_DB_<REF>=mysql://user:pass@host:port/dbname
 KNOWLEDGE_PILOT_REQUEST_BODY_LIMIT_BYTES=2097152
 KNOWLEDGE_PILOT_CHUNK_SIZE=600
 KNOWLEDGE_PILOT_CHUNK_OVERLAP=100
