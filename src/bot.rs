@@ -216,7 +216,7 @@ fn build_bot_system_prompt(skills: &[&SqlSkill]) -> String {
   {{"action":"skill","skill_name":"<技能名>","parameters":{{"<参数名>":<提取值>}}}}
 - 如果用户意图是询问平台使用方法、概念、流程、常见问题或未匹配到数据技能，返回 JSON:
   {{"action":"rag","query":"<提取并优化后的检索关键词>"}}
-- 如果用户输入为简单问候（如“你好”、“在吗”）、功能咨询（“你能做什么”）或无须查询的闲聊，返回 JSON:
+- 如果用户输入为简单问候（如“你好”、“在吗”）、功能咨询（“你能做什么”、“你现在知道什么”）、能力介绍或无须查询的闲聊，返回 JSON:
   {{"action":"direct","response":"<礼貌热情地回答用户并简述你的两大能力>"}}
 
 必须严格仅返回一个合法 JSON 对象，不要输出 markdown 代码块标记，不要包含其他文字。"#
@@ -230,24 +230,56 @@ fn parse_bot_action(content: &str) -> Result<BotAction, AgentError> {
     serde_json::from_str(json_str).map_err(|e| AgentError::InvalidPlan(format!("{e}: {json_str}")))
 }
 
+fn is_capabilities_or_greeting_query(text: &str) -> bool {
+    let trimmed = text.trim();
+    let lower = trimmed.to_lowercase();
+    let exact_greetings = ["你好", "您好", "hello", "hi", "在吗", "帮助", "help"];
+    if exact_greetings.iter().any(|&g| {
+        lower == g
+            || lower == format!("{g}呀")
+            || lower == format!("{g}啊")
+            || lower == format!("{g}！")
+            || lower == format!("{g}!")
+    }) {
+        return true;
+    }
+
+    let capability_patterns = [
+        "知道什么",
+        "知道些什么",
+        "懂什么",
+        "能做什么",
+        "你会什么",
+        "你能干什么",
+        "有哪些技能",
+        "有哪些功能",
+        "支持什么",
+        "能查什么",
+        "可以查什么",
+        "介绍一下",
+        "自我介绍",
+        "有什么功能",
+        "有什么技能",
+        "知识库有什么",
+        "有哪些知识",
+        "你是什么",
+        "你的功能",
+        "使用帮助",
+    ];
+
+    capability_patterns
+        .iter()
+        .any(|&pattern| lower.contains(pattern))
+}
+
 /// Fallback rule-based router when LLM is unavailable or in extractive mode
 pub fn rule_based_route(message: &str, skills: &[&SqlSkill]) -> BotAction {
     let trimmed = message.trim();
 
-    // Check greetings / bot help
-    let greetings = [
-        "你好",
-        "您好",
-        "hello",
-        "hi",
-        "在吗",
-        "帮助",
-        "你能做什么",
-        "介绍一下自己",
-    ];
-    if greetings.iter().any(|&g| trimmed.eq_ignore_ascii_case(g)) {
+    // Check greetings / bot capabilities query
+    if is_capabilities_or_greeting_query(trimmed) {
         return BotAction::Direct {
-            response: "您好！我是平台内部智能助手。我可以帮您：\n1. 查阅平台使用指南与文档（知识库问答）\n2. 查询实时平台与业务数据（预置数据技能）\n请告诉我您需要什么帮助！".to_string(),
+            response: String::new(),
         };
     }
 
@@ -393,6 +425,44 @@ impl BotService {
         )
     }
 
+    pub fn build_capabilities_overview(&self) -> String {
+        let skills = self.skills.list();
+        let mut text = String::new();
+        text.push_str("您好！我是企业平台内部智能助手。目前我掌握以下两类核心能力：\n\n");
+
+        text.push_str("📊 **实时数据查询技能（SQL Skills）**：\n");
+        if skills.is_empty() {
+            text.push_str("- （当前暂未加载数据技能）\n");
+        } else {
+            for skill in skills {
+                text.push_str(&format!("- **{}**：{}\n", skill.name, skill.description));
+            }
+        }
+
+        text.push_str("\n📖 **平台知识库与使用指南（RAG 检索）**：\n");
+        if let Ok(docs) = self.rag.list_documents() {
+            if docs.is_empty() {
+                text.push_str("- （知识库暂未入库文档，可通过 `/upload` 页面上传）\n");
+            } else {
+                text.push_str(&format!("- 已收录 {} 篇知识文档，包括：", docs.len()));
+                let sample_titles: Vec<&str> =
+                    docs.iter().take(3).map(|d| d.title.as_str()).collect();
+                text.push_str(&sample_titles.join("、"));
+                if docs.len() > 3 {
+                    text.push_str(" 等");
+                }
+                text.push('\n');
+            }
+        }
+
+        text.push_str("\n💡 **您可以直接向我提问，例如**：\n");
+        text.push_str("- “查一下微服务 auth-service 最近的指标”\n");
+        text.push_str("- “查询用户 1001 的基本信息”\n");
+        text.push_str("- “企业 API 安全管理规范是什么？”\n");
+
+        text
+    }
+
     pub fn chat(
         &self,
         message: &str,
@@ -463,18 +533,25 @@ impl BotService {
                     confidence: Some(rag_res.confidence),
                 })
             }
-            BotAction::Direct { response } => Ok(BotChatResponse {
-                reply: response,
-                action_taken: "direct".to_string(),
-                skill_used: None,
-                skill_data: None,
-                citations: Vec::new(),
-                confidence: Some(AnswerConfidence {
-                    level: ConfidenceLevel::High,
-                    score: 1.0,
-                    reason: "Direct assistant response".into(),
-                }),
-            }),
+            BotAction::Direct { response } => {
+                let reply = if response.is_empty() {
+                    self.build_capabilities_overview()
+                } else {
+                    response
+                };
+                Ok(BotChatResponse {
+                    reply,
+                    action_taken: "direct".to_string(),
+                    skill_used: None,
+                    skill_data: None,
+                    citations: Vec::new(),
+                    confidence: Some(AnswerConfidence {
+                        level: ConfidenceLevel::High,
+                        score: 1.0,
+                        reason: "Direct assistant response".into(),
+                    }),
+                })
+            }
         }
     }
 
@@ -607,6 +684,11 @@ impl BotService {
                 })
             }
             BotAction::Direct { response } => {
+                let reply = if response.is_empty() {
+                    self.build_capabilities_overview()
+                } else {
+                    response
+                };
                 let action_event = serde_json::json!({
                     "type": "action",
                     "action": "direct"
@@ -615,12 +697,12 @@ impl BotService {
 
                 let token_event = serde_json::json!({
                     "type": "token",
-                    "content": response
+                    "content": reply
                 });
                 on_event(&token_event.to_string())?;
 
                 Ok(BotChatResponse {
-                    reply: response,
+                    reply,
                     action_taken: "direct".to_string(),
                     skill_used: None,
                     skill_data: None,
@@ -668,10 +750,17 @@ mod tests {
     fn test_rule_based_greeting() {
         let action = rule_based_route("你好", &[]);
         match action {
-            BotAction::Direct { response } => {
-                assert!(response.contains("智能助手"));
-            }
+            BotAction::Direct { response: _ } => {}
             _ => panic!("Expected Direct action"),
+        }
+    }
+
+    #[test]
+    fn test_rule_based_capabilities_query() {
+        let action = rule_based_route("你现在知道什么？", &[]);
+        match action {
+            BotAction::Direct { response: _ } => {}
+            _ => panic!("Expected Direct action for capabilities query"),
         }
     }
 
