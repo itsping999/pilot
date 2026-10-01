@@ -268,6 +268,12 @@ pub fn rule_based_route(message: &str, skills: &[&SqlSkill]) -> BotAction {
                     } else if let Some(def) = &param.default {
                         parameters.insert(param.name.clone(), def.clone());
                     }
+                } else if param.param_type == "string" {
+                    if let Some(val) = extract_identifier_from_text(trimmed, &skill.keywords) {
+                        parameters.insert(param.name.clone(), serde_json::json!(val));
+                    } else if let Some(def) = &param.default {
+                        parameters.insert(param.name.clone(), def.clone());
+                    }
                 } else if let Some(def) = &param.default {
                     parameters.insert(param.name.clone(), def.clone());
                 }
@@ -296,6 +302,37 @@ fn extract_number_from_text(text: &str) -> Option<i64> {
         }
     }
     current_digits.parse::<i64>().ok()
+}
+
+fn extract_identifier_from_text(text: &str, exclude_keywords: &[String]) -> Option<String> {
+    // Check for quoted tokens: "..." or '...' or “...”
+    for (start_quote, end_quote) in [('"', '"'), ('\'', '\''), ('“', '”'), ('‘', '’')] {
+        if let Some(start) = text.find(start_quote)
+            && let Some(end) = text[start + start_quote.len_utf8()..].find(end_quote)
+        {
+            let candidate =
+                text[start + start_quote.len_utf8()..start + start_quote.len_utf8() + end].trim();
+            if !candidate.is_empty() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    // Check words/tokens with ascii alphanumeric + hyphens/underscores (e.g. auth-service, order-api, alice)
+    let words = text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+
+    for word in words {
+        let w = word.trim().trim_matches(|c| c == '-' || c == '_');
+        if w.is_empty() || w.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let is_excluded = exclude_keywords.iter().any(|k| k.eq_ignore_ascii_case(w));
+        if !is_excluded {
+            return Some(w.to_string());
+        }
+    }
+
+    None
 }
 
 pub struct BotService {
