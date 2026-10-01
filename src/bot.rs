@@ -603,11 +603,13 @@ impl BotService {
                         });
                         on_event(&data_event.to_string())?;
 
-                        let token_event = serde_json::json!({
-                            "type": "token",
-                            "content": formatted
-                        });
-                        on_event(&token_event.to_string())?;
+                        for line in formatted.split_inclusive('\n') {
+                            let token_event = serde_json::json!({
+                                "type": "token",
+                                "content": line
+                            });
+                            on_event(&token_event.to_string())?;
+                        }
 
                         Ok(BotChatResponse {
                             reply: formatted,
@@ -695,11 +697,13 @@ impl BotService {
                 });
                 on_event(&action_event.to_string())?;
 
-                let token_event = serde_json::json!({
-                    "type": "token",
-                    "content": reply
-                });
-                on_event(&token_event.to_string())?;
+                for line in reply.split_inclusive('\n') {
+                    let token_event = serde_json::json!({
+                        "type": "token",
+                        "content": line
+                    });
+                    on_event(&token_event.to_string())?;
+                }
 
                 Ok(BotChatResponse {
                     reply,

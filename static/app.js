@@ -503,36 +503,145 @@
     return msg;
   }
 
-  function typeMessage(msg, text) {
-    var bubble = msg.querySelector(".message-bubble");
-    var chars = Array.from(text);
-    var index = 0;
-    var delay = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 18;
+  function formatMarkdown(text) {
+    if (!text) return "";
+    var escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
 
-    msg.classList.add("typing");
-    bubble.textContent = "";
+    var lines = escaped.split("\n");
+    var out = [];
+    var inTable = false;
+    var tableHeaders = [];
+    var tableRows = [];
 
-    return new Promise(function (resolve) {
-      function renderNext() {
-        if (index >= chars.length) {
-          msg.classList.remove("typing");
-          resolve();
-          return;
+    function flushTable() {
+      if (!inTable) return;
+      var tableHtml = '<table class="chat-markdown-table"><thead><tr>';
+      for (var i = 0; i < tableHeaders.length; i++) {
+        tableHtml += "<th>" + tableHeaders[i] + "</th>";
+      }
+      tableHtml += "</tr></thead><tbody>";
+      for (var r = 0; r < tableRows.length; r++) {
+        tableHtml += "<tr>";
+        for (var c = 0; c < tableRows[r].length; c++) {
+          tableHtml += "<td>" + tableRows[r][c] + "</td>";
         }
+        tableHtml += "</tr>";
+      }
+      tableHtml += "</tbody></table>";
+      out.push(tableHtml);
+      inTable = false;
+      tableHeaders = [];
+      tableRows = [];
+    }
 
-        bubble.textContent += chars[index];
-        index += 1;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var trimmed = line.trim();
 
-        if (delay === 0) {
-          renderNext();
+      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        var cells = trimmed.slice(1, -1).split("|").map(function (c) { return c.trim(); });
+        var isSep = cells.every(function (c) { return /^:?-+:?$/.test(c); });
+        if (isSep) {
+          continue;
+        }
+        if (!inTable) {
+          inTable = true;
+          tableHeaders = cells;
         } else {
-          window.setTimeout(renderNext, delay);
+          tableRows.push(cells);
         }
+        continue;
+      } else {
+        flushTable();
       }
 
-      renderNext();
-    });
+      var formatted = line
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>");
+      out.push(formatted);
+    }
+    flushTable();
+    return out.join("\n");
+  }
+
+  function createStreamTypewriter(targetEl, options) {
+    var queue = [];
+    var fullText = "";
+    var isRunning = false;
+    var isComplete = false;
+    var timer = null;
+    var onScroll = options && options.onScroll;
+    var onFinish = options && options.onFinish;
+    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function step() {
+      if (queue.length === 0) {
+        isRunning = false;
+        if (isComplete) {
+          if (onFinish) onFinish(fullText);
+        }
+        return;
+      }
+
+      isRunning = true;
+
+      // Adaptive typing speed based on pending buffer length
+      var count = 1;
+      if (reducedMotion) {
+        count = queue.length;
+      } else if (queue.length > 160) {
+        count = Math.ceil(queue.length / 15);
+      } else if (queue.length > 60) {
+        count = 4;
+      } else if (queue.length > 20) {
+        count = 2;
+      } else {
+        count = 1;
+      }
+
+      var chunk = "";
+      for (var i = 0; i < count && queue.length > 0; i++) {
+        chunk += queue.shift();
+      }
+      targetEl.textContent += chunk;
+
+      if (onScroll) onScroll();
+
+      var delay = reducedMotion ? 0 : 16;
+      timer = setTimeout(step, delay);
+    }
+
+    return {
+      write: function (text) {
+        if (!text) return;
+        fullText += text;
+        var chars = Array.from(text);
+        for (var i = 0; i < chars.length; i++) {
+          queue.push(chars[i]);
+        }
+        if (!isRunning) {
+          step();
+        }
+      },
+      complete: function () {
+        isComplete = true;
+        if (!isRunning && queue.length === 0) {
+          if (onFinish) onFinish(fullText);
+        }
+      },
+      flush: function () {
+        if (timer) clearTimeout(timer);
+        if (queue.length > 0) {
+          targetEl.textContent += queue.join("");
+          queue = [];
+        }
+        isRunning = false;
+        if (onFinish) onFinish(fullText);
+      }
+    };
   }
 
   function appendCitations(parentEl, citations) {
@@ -910,9 +1019,16 @@
     return appendMessage("assistant", content);
   }
 
+  var activeTypewriter = null;
+
   async function sendQuestion() {
     var question = chatInput.value.trim();
     if (!question) return;
+
+    if (activeTypewriter) {
+      activeTypewriter.flush();
+      activeTypewriter = null;
+    }
 
     appendMessage("user", question);
     chatInput.value = "";
@@ -943,13 +1059,25 @@
 
       var badgeEl = document.createElement("div");
       badgeEl.className = "bot-action-badge";
-      badgeEl.style.fontSize = "0.75rem";
-      badgeEl.style.opacity = "0.75";
-      badgeEl.style.marginBottom = "4px";
       bubble.appendChild(badgeEl);
 
-      var textEl = document.createElement("div");
+      var textEl = document.createElement("span");
+      textEl.className = "message-text";
       bubble.appendChild(textEl);
+
+      var typewriterFinishPromise = new Promise(function (resolve) {
+        var typewriter = createStreamTypewriter(textEl, {
+          onScroll: function () {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+          },
+          onFinish: function (fullText) {
+            msg.classList.remove("typing");
+            textEl.innerHTML = formatMarkdown(fullText);
+            resolve();
+          },
+        });
+        activeTypewriter = typewriter;
+      });
 
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
@@ -959,29 +1087,32 @@
       while (true) {
         var result = await reader.read();
         if (result.done) break;
-        
+
         buffer += decoder.decode(result.value, { stream: true });
         var lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        
+
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i].trim();
           if (!line.startsWith("data: ")) continue;
-          
+
           var jsonStr = line.slice(6);
           try {
             var event = JSON.parse(jsonStr);
             if (event.type === "action") {
               if (event.action === "skill") {
+                badgeEl.className = "bot-action-badge skill";
                 badgeEl.textContent = "⚡ 执行数据技能: " + (event.skill_name || "");
               } else if (event.action === "rag") {
+                badgeEl.className = "bot-action-badge rag";
                 badgeEl.textContent = "📖 知识库检索";
               }
             } else if (event.type === "metadata") {
               metadata = event;
             } else if (event.type === "token") {
-              textEl.textContent += event.content;
-              chatMessages.scrollTop = chatMessages.scrollHeight;
+              if (activeTypewriter) {
+                activeTypewriter.write(event.content);
+              }
             } else if (event.type === "done") {
               // Stream complete
             }
@@ -991,12 +1122,23 @@
         }
       }
 
-      msg.classList.remove("typing");
+      if (activeTypewriter) {
+        activeTypewriter.complete();
+      }
+
+      await typewriterFinishPromise;
+      activeTypewriter = null;
+
       if (metadata) {
         appendConfidence(msg, metadata.confidence);
         appendCitations(msg, metadata.citations);
       }
+      chatMessages.scrollTop = chatMessages.scrollHeight;
     } catch (err) {
+      if (activeTypewriter) {
+        activeTypewriter.flush();
+        activeTypewriter = null;
+      }
       loadingMsg.remove();
       appendMessage("error", t("errPrefix") + String(err));
     } finally {
