@@ -51,12 +51,15 @@ impl Retriever for SqliteRetriever {
         // Spread > 0.4 means discriminative embeddings (Ollama); <= 0.4 means clustered (hash)
         let vector_weight_factor = if vector_spread > 0.4 { 2.0 } else { 1.0 };
 
+        let query_ctx = PrecomputedQuery::new(question);
+
         let mut scored: Vec<RetrievedChunk> = chunks_with_vectors
             .into_iter()
             .zip(vector_scores.iter())
             .map(|((chunk, _vector), &vector_score)| {
-                let text_score = lexical_score(question, &chunk.text);
-                let title_score = title_boost(question, &chunk.document_title, &chunk.section);
+                let text_score = lexical_score_with_query(&query_ctx, &chunk.text);
+                let title_score =
+                    title_boost_with_query(&query_ctx, &chunk.document_title, &chunk.section);
                 let final_score = combined_score_adaptive(
                     vector_score,
                     text_score,
@@ -108,33 +111,111 @@ fn combined_score_adaptive(
     }
 }
 
-fn title_boost(question: &str, title: &str, section: &str) -> f32 {
-    let title_compact = compact_cjk_and_ascii(title);
-    let section_compact = compact_cjk_and_ascii(section);
-    let terms = lexical_terms(question);
-    if terms.is_empty() {
+struct PrecomputedQuery {
+    terms: Vec<String>,
+    technical_terms: Vec<String>,
+    anchors: Vec<String>,
+    cjk_keywords: Vec<String>,
+    subject_before_goal: Option<String>,
+    active_type_patterns: Vec<(&'static str, f32)>,
+}
+
+impl PrecomputedQuery {
+    fn new(question: &str) -> Self {
+        let terms = lexical_terms(question);
+        let technical_terms = terms
+            .iter()
+            .filter(|term| term.len() >= 3 && term.is_ascii())
+            .cloned()
+            .collect();
+        let question_compact = compact_cjk_and_ascii(question);
+        let anchors = answer_anchor_phrases(&question_compact);
+        let cjk_keywords = extract_cjk_keywords(&question_compact);
+        let subject_before_goal = subject_before_goal(&question_compact);
+
+        const PATTERNS: &[(&str, f32)] = &[
+            ("负责哪些", 0.3),
+            ("分为哪些阶段", 0.3),
+            ("能力域", 0.2),
+            ("成熟度等级", 0.2),
+            ("评估方法", 0.2),
+            ("改进路径", 0.2),
+            ("整改闭环", 0.3),
+            ("应急响应", 0.3),
+            ("备份策略", 0.3),
+            ("备份恢复", 0.3),
+            ("脱敏", 0.2),
+            ("跨境", 0.2),
+            ("出境", 0.2),
+            ("数据质量", 0.2),
+            ("风险评估", 0.2),
+            ("embedding", 0.3),
+            ("知识库", 0.2),
+            ("准入指标", 0.3),
+            ("发布流程", 0.3),
+            ("响应时间", 0.3),
+            ("事件升级", 0.3),
+            ("事后回顾", 0.3),
+            ("数据校验", 0.3),
+            ("会计核算", 0.3),
+            ("敏感个人信息", 0.3),
+            ("合法性基础", 0.3),
+            ("必填字段", 0.3),
+            ("采集方式", 0.3),
+            ("RTO", 0.3),
+            ("RPO", 0.3),
+            ("灾备", 0.3),
+            ("恢复组织", 0.3),
+            ("设备准入", 0.3),
+            ("网络分区", 0.3),
+            ("Purdue", 0.3),
+        ];
+
+        let active_type_patterns = PATTERNS
+            .iter()
+            .filter(|(pattern, _)| question_compact.contains(*pattern))
+            .copied()
+            .collect();
+
+        Self {
+            terms,
+            technical_terms,
+            anchors,
+            cjk_keywords,
+            subject_before_goal,
+            active_type_patterns,
+        }
+    }
+}
+
+fn title_boost_with_query(query: &PrecomputedQuery, title: &str, section: &str) -> f32 {
+    if query.terms.is_empty() {
         return 0.0;
     }
 
+    let title_compact = compact_cjk_and_ascii(title);
+    let section_compact = compact_cjk_and_ascii(section);
     let title_lower = title_compact.to_lowercase();
     let section_lower = section_compact.to_lowercase();
-    let title_matches = terms
+
+    let title_matches = query
+        .terms
         .iter()
         .filter(|term| title_lower.contains(term.as_str()))
         .count();
-    let section_matches = terms
+    let section_matches = query
+        .terms
         .iter()
         .filter(|term| section_lower.contains(term.as_str()))
         .count();
 
-    let title_ratio = title_matches as f32 / terms.len() as f32;
-    let section_ratio = section_matches as f32 / terms.len() as f32;
+    let title_ratio = title_matches as f32 / query.terms.len() as f32;
+    let section_ratio = section_matches as f32 / query.terms.len() as f32;
 
     let mut boost = 0.0;
     if title_ratio > 0.1 {
         boost += 0.3;
     }
-    // Proportional bonus for higher title match ratio
     if title_ratio > 0.3 {
         boost += 0.2;
     }
@@ -144,32 +225,25 @@ fn title_boost(question: &str, title: &str, section: &str) -> f32 {
         boost += 0.15;
     }
 
-    // Extra boost for specific technical terms (ASCII tokens >= 3 chars) in title
-    let technical_terms: Vec<&str> = terms
+    let technical_title_hits = query
+        .technical_terms
         .iter()
-        .filter(|term| term.len() >= 3 && term.is_ascii())
-        .map(|term| term.as_str())
-        .collect();
-    let technical_title_hits = technical_terms
-        .iter()
-        .filter(|term| title_lower.contains(*term))
+        .filter(|term| title_lower.contains(term.as_str()))
         .count();
-    if technical_title_hits > 0 && technical_title_hits == technical_terms.len() {
+    if technical_title_hits > 0 && technical_title_hits == query.technical_terms.len() {
         boost += 0.4;
     }
 
-    let question_compact = compact_cjk_and_ascii(question);
-    let anchors = answer_anchor_phrases(&question_compact);
-    if anchors
+    if query
+        .anchors
         .iter()
         .any(|anchor| title_lower.contains(anchor.as_str()))
     {
         boost += 0.3;
     }
 
-    // Bonus for exact question keywords in title (3+ char CJK sequences)
-    let question_keywords = extract_cjk_keywords(&question_compact);
-    let title_keyword_hits = question_keywords
+    let title_keyword_hits = query
+        .cjk_keywords
         .iter()
         .filter(|kw| title_lower.contains(kw.as_str()))
         .count();
@@ -178,6 +252,12 @@ fn title_boost(question: &str, title: &str, section: &str) -> f32 {
     }
 
     boost
+}
+
+#[cfg(test)]
+fn title_boost(question: &str, title: &str, section: &str) -> f32 {
+    let query = PrecomputedQuery::new(question);
+    title_boost_with_query(&query, title, section)
 }
 
 /// Extract 4+ character CJK keywords from text
@@ -205,108 +285,57 @@ fn extract_cjk_keywords(text: &str) -> Vec<String> {
     keywords
 }
 
-fn lexical_score(question: &str, text: &str) -> f32 {
-    let terms = lexical_terms(question);
-    if terms.is_empty() {
+fn lexical_score_with_query(query: &PrecomputedQuery, text: &str) -> f32 {
+    if query.terms.is_empty() {
         return 0.0;
     }
 
-    let text = text.to_lowercase();
-    let matches = terms
+    let text_lower = text.to_lowercase();
+    let matches = query
+        .terms
         .iter()
-        .filter(|term| text.contains(term.as_str()))
+        .filter(|term| text_lower.contains(term.as_str()))
         .count();
-    let score = matches as f32 / terms.len() as f32;
-    (score + semantic_phrase_bonus(question, &text)).min(1.0)
+    let score = matches as f32 / query.terms.len() as f32;
+    (score + semantic_phrase_bonus_with_query(query, &text_lower)).min(1.0)
 }
 
-fn semantic_phrase_bonus(question: &str, text: &str) -> f32 {
-    exact_answer_anchor_bonus(question, text)
-        + question_subject_bonus(question, text)
-        + subject_before_goal(question)
-            .filter(|subject| {
-                text.contains(&format!("{subject}的目标"))
-                    || text.contains(&format!("{subject}目标"))
-                    || text.contains(&format!("{subject}的目的"))
-                    || text.contains(&format!("{subject}目的"))
-            })
-            .map(|_| 0.3)
-            .unwrap_or(0.0)
-        + question_type_match_bonus(question, text)
+#[cfg(test)]
+fn lexical_score(question: &str, text: &str) -> f32 {
+    let query = PrecomputedQuery::new(question);
+    lexical_score_with_query(&query, text)
 }
 
-fn question_subject_bonus(question: &str, text: &str) -> f32 {
-    let q = compact_cjk_and_ascii(question);
-    let t = compact_cjk_and_ascii(text);
+fn semantic_phrase_bonus_with_query(query: &PrecomputedQuery, text_lower: &str) -> f32 {
     let mut bonus = 0.0f32;
 
-    if let Some(subject) = subject_before_goal(&q)
-        && t.contains(&subject)
-    {
-        bonus += 0.2;
+    for anchor in &query.anchors {
+        if text_lower.contains(anchor.as_str()) {
+            bonus += 0.4;
+        }
     }
 
-    bonus
-}
+    let text_compact = compact_cjk_and_ascii(text_lower);
 
-fn question_type_match_bonus(question: &str, text: &str) -> f32 {
-    let q = compact_cjk_and_ascii(question);
-    let t = compact_cjk_and_ascii(text);
-    let mut bonus = 0.0f32;
+    if let Some(subject) = &query.subject_before_goal {
+        if text_compact.contains(subject) {
+            bonus += 0.2;
+        }
+        if text_lower.contains(&format!("{subject}的目标"))
+            || text_lower.contains(&format!("{subject}目标"))
+            || text_lower.contains(&format!("{subject}的目的"))
+            || text_lower.contains(&format!("{subject}目的"))
+        {
+            bonus += 0.3;
+        }
+    }
 
-    for (pattern, weight) in [
-        ("负责哪些", 0.3),
-        ("分为哪些阶段", 0.3),
-        ("能力域", 0.2),
-        ("成熟度等级", 0.2),
-        ("评估方法", 0.2),
-        ("改进路径", 0.2),
-        ("整改闭环", 0.3),
-        ("应急响应", 0.3),
-        ("备份策略", 0.3),
-        ("备份恢复", 0.3),
-        ("脱敏", 0.2),
-        ("跨境", 0.2),
-        ("出境", 0.2),
-        ("数据质量", 0.2),
-        ("风险评估", 0.2),
-        ("embedding", 0.3),
-        ("知识库", 0.2),
-        ("准入指标", 0.3),
-        ("发布流程", 0.3),
-        ("响应时间", 0.3),
-        ("事件升级", 0.3),
-        ("事后回顾", 0.3),
-        ("数据校验", 0.3),
-        ("会计核算", 0.3),
-        ("敏感个人信息", 0.3),
-        ("合法性基础", 0.3),
-        ("必填字段", 0.3),
-        ("采集方式", 0.3),
-        ("RTO", 0.3),
-        ("RPO", 0.3),
-        ("灾备", 0.3),
-        ("恢复组织", 0.3),
-        ("设备准入", 0.3),
-        ("网络分区", 0.3),
-        ("Purdue", 0.3),
-    ] {
-        if q.contains(pattern) && t.contains(pattern) {
+    for (pattern, weight) in &query.active_type_patterns {
+        if text_compact.contains(pattern) {
             bonus += weight;
         }
     }
 
-    bonus
-}
-
-fn exact_answer_anchor_bonus(question: &str, text: &str) -> f32 {
-    let anchors = answer_anchor_phrases(question);
-    let mut bonus = 0.0f32;
-    for anchor in &anchors {
-        if text.contains(anchor.as_str()) {
-            bonus += 0.4;
-        }
-    }
     bonus
 }
 
