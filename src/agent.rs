@@ -86,21 +86,29 @@ fn compact_query(query: &str, max_chars: usize) -> String {
 
 pub struct ChatCompletionsPlanner {
     config: ChatCompletionsProviderConfig,
+    client: reqwest::blocking::Client,
 }
 
 pub struct ClaudeMessagesPlanner {
     config: ClaudeMessagesProviderConfig,
+    client: reqwest::blocking::Client,
 }
 
 impl ClaudeMessagesPlanner {
     pub fn new(config: ClaudeMessagesProviderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: reqwest::blocking::Client::new(),
+        }
     }
 }
 
 impl ChatCompletionsPlanner {
     pub fn new(config: ChatCompletionsProviderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: reqwest::blocking::Client::new(),
+        }
     }
 }
 
@@ -234,14 +242,14 @@ impl ClaudeMessagesPlanner {
 }
 
 impl ChatCompletionsPlanner {
-    fn client(&self) -> reqwest::blocking::Client {
-        reqwest::blocking::Client::new()
+    fn client(&self) -> &reqwest::blocking::Client {
+        &self.client
     }
 }
 
 impl ClaudeMessagesPlanner {
-    fn client(&self) -> reqwest::blocking::Client {
-        reqwest::blocking::Client::new()
+    fn client(&self) -> &reqwest::blocking::Client {
+        &self.client
     }
 }
 

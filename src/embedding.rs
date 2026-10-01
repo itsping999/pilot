@@ -43,12 +43,17 @@ impl Embedder for HashEmbedder {
 pub struct OllamaEmbedder {
     config: EmbeddingProviderConfig,
     model_name: String,
+    client: reqwest::blocking::Client,
 }
 
 impl OllamaEmbedder {
     pub fn new(config: EmbeddingProviderConfig) -> Self {
         let model_name = format!("ollama:{}", config.model);
-        Self { config, model_name }
+        Self {
+            config,
+            model_name,
+            client: reqwest::blocking::Client::new(),
+        }
     }
 }
 
@@ -98,8 +103,8 @@ impl Embedder for OllamaEmbedder {
 }
 
 impl OllamaEmbedder {
-    fn client(&self) -> reqwest::blocking::Client {
-        reqwest::blocking::Client::new()
+    fn client(&self) -> &reqwest::blocking::Client {
+        &self.client
     }
 }
 

@@ -346,11 +346,15 @@ fn compact_text(text: &str) -> String {
 
 pub struct ChatCompletionsGenerator {
     config: ChatCompletionsProviderConfig,
+    client: reqwest::blocking::Client,
 }
 
 impl ChatCompletionsGenerator {
     pub fn new(config: ChatCompletionsProviderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: reqwest::blocking::Client::new(),
+        }
     }
 }
 
@@ -378,8 +382,8 @@ impl Generator for ChatCompletionsGenerator {
 
         let prompt = format!("参考资料：\n{context_text}\n\n问题：{question}");
 
-        let client = reqwest::blocking::Client::new();
-        let mut request = client
+        let mut request = self
+            .client
             .post(self.config.endpoint_url())
             .json(&serde_json::json!({
                 "model": self.config.model,
@@ -431,11 +435,15 @@ impl Generator for ChatCompletionsGenerator {
 
 pub struct ClaudeMessagesGenerator {
     config: ClaudeMessagesProviderConfig,
+    client: reqwest::blocking::Client,
 }
 
 impl ClaudeMessagesGenerator {
     pub fn new(config: ClaudeMessagesProviderConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            client: reqwest::blocking::Client::new(),
+        }
     }
 }
 
@@ -463,8 +471,8 @@ impl Generator for ClaudeMessagesGenerator {
 
         let prompt = format!("参考资料：\n{context_text}\n\n问题：{question}");
 
-        let client = reqwest::blocking::Client::new();
-        let mut request = client
+        let mut request = self
+            .client
             .post(self.config.endpoint_url())
             .json(&serde_json::json!({
                 "model": self.config.model,
