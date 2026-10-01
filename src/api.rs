@@ -384,30 +384,53 @@ async fn query_rag_stream(
         access_scopes.push(access_scope);
     }
 
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(64);
     let rag = state.rag.clone();
     let q = question.clone();
-    let response = run_blocking(move || rag.answer_with_scopes(&q, top_k, &access_scopes)).await?;
 
-    let answer = response.answer.clone();
-
-    let stream = async_stream::stream! {
-        let meta = serde_json::json!({
-            "type": "metadata",
-            "citations": response.citations,
-            "confidence": response.confidence
-        });
-        yield Ok(Event::default().data(meta.to_string()));
-
-        for ch in answer.chars() {
+    tokio::task::spawn_blocking(move || {
+        let sender = tx.clone();
+        let stream_result = rag.answer_stream_with_scopes(&q, top_k, &access_scopes, |token| {
             let chunk = serde_json::json!({
                 "type": "token",
-                "content": ch.to_string()
+                "content": token
             });
-            yield Ok(Event::default().data(chunk.to_string()));
-            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-        }
+            if sender
+                .blocking_send(Event::default().data(chunk.to_string()))
+                .is_err()
+            {
+                return Err(crate::generation::GenerateError::Provider(
+                    "client disconnected".to_string(),
+                ));
+            }
+            Ok(())
+        });
 
-        yield Ok(Event::default().data(r#"{"type":"done"}"#));
+        match stream_result {
+            Ok(response) => {
+                let meta = serde_json::json!({
+                    "type": "metadata",
+                    "citations": response.citations,
+                    "confidence": response.confidence
+                });
+                let _ = tx.blocking_send(Event::default().data(meta.to_string()));
+                let _ = tx.blocking_send(Event::default().data(r#"{"type":"done"}"#));
+            }
+            Err(err) => {
+                let err_msg = serde_json::json!({
+                    "type": "error",
+                    "content": err.to_string()
+                });
+                let _ = tx.blocking_send(Event::default().data(err_msg.to_string()));
+                let _ = tx.blocking_send(Event::default().data(r#"{"type":"done"}"#));
+            }
+        }
+    });
+
+    let stream = async_stream::stream! {
+        while let Some(event) = rx.recv().await {
+            yield Ok(event);
+        }
     };
 
     Ok(Sse::new(stream))

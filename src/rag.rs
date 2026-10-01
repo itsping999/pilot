@@ -117,6 +117,52 @@ impl RagService {
         self.answer_traditional(question, top_k, &allowed_scopes)
     }
 
+    pub fn answer_stream_with_scopes<F>(
+        &self,
+        question: &str,
+        top_k: usize,
+        access_scopes: &[String],
+        mut on_token: F,
+    ) -> Result<RagResponse, RagError>
+    where
+        F: FnMut(&str) -> Result<(), GenerateError>,
+    {
+        let allowed_scopes = allowed_access_scopes(access_scopes);
+        let context = if let Some(planner) = &self.query_planner {
+            self.retrieve_agentic_context(question, top_k, planner.as_ref(), &allowed_scopes)?
+        } else {
+            self.retrieve_context(question, top_k, &allowed_scopes)?
+        };
+
+        let confidence = confidence_for_context(question, &context);
+        let answer = if confidence.level == ConfidenceLevel::Low {
+            let ans = insufficient_context_answer(question);
+            on_token(&ans)?;
+            ans
+        } else {
+            self.generator
+                .generate_stream(question, &context, &mut on_token)?
+        };
+
+        let citations = citations_for_answer(&answer, &context);
+        let citations_json = serde_json::to_string(&citations)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        self.store.record_answer(
+            question,
+            &answer,
+            &citations_json,
+            confidence.level.as_str(),
+            confidence.score,
+            &confidence.reason,
+        )?;
+
+        Ok(RagResponse {
+            answer,
+            citations,
+            confidence,
+        })
+    }
+
     fn answer_traditional(
         &self,
         question: &str,
@@ -134,6 +180,17 @@ impl RagService {
         planner: &dyn QueryPlanner,
         allowed_scopes: &[String],
     ) -> Result<RagResponse, RagError> {
+        let context = self.retrieve_agentic_context(question, top_k, planner, allowed_scopes)?;
+        self.answer_from_context(question, context)
+    }
+
+    fn retrieve_agentic_context(
+        &self,
+        question: &str,
+        top_k: usize,
+        planner: &dyn QueryPlanner,
+        allowed_scopes: &[String],
+    ) -> Result<Vec<RetrievedChunk>, RagError> {
         const MAX_AGENT_CONTEXT_CHUNKS: usize = 32;
 
         let plan = match planner.plan(question) {
@@ -181,7 +238,7 @@ impl RagService {
             context.len()
         );
 
-        self.answer_from_context(question, context)
+        Ok(context)
     }
 
     fn retrieve_context_for_queries(

@@ -5,6 +5,17 @@ pub trait Generator: Send + Sync {
     fn name(&self) -> &str;
     fn generate(&self, question: &str, context: &[RetrievedChunk])
     -> Result<String, GenerateError>;
+
+    fn generate_stream(
+        &self,
+        question: &str,
+        context: &[RetrievedChunk],
+        on_token: &mut dyn FnMut(&str) -> Result<(), GenerateError>,
+    ) -> Result<String, GenerateError> {
+        let full = self.generate(question, context)?;
+        on_token(&full)?;
+        Ok(full)
+    }
 }
 
 #[derive(Debug)]
@@ -47,6 +58,19 @@ impl Generator for ExtractiveGenerator {
         } else {
             Ok(format_english_answer(question, context))
         }
+    }
+
+    fn generate_stream(
+        &self,
+        question: &str,
+        context: &[RetrievedChunk],
+        on_token: &mut dyn FnMut(&str) -> Result<(), GenerateError>,
+    ) -> Result<String, GenerateError> {
+        let full = self.generate(question, context)?;
+        for line in full.split_inclusive('\n') {
+            on_token(line)?;
+        }
+        Ok(full)
     }
 }
 
@@ -431,6 +455,90 @@ impl Generator for ChatCompletionsGenerator {
 
         Ok(answer)
     }
+
+    fn generate_stream(
+        &self,
+        question: &str,
+        context: &[RetrievedChunk],
+        on_token: &mut dyn FnMut(&str) -> Result<(), GenerateError>,
+    ) -> Result<String, GenerateError> {
+        use std::io::BufRead;
+
+        let context_text = context
+            .iter()
+            .map(|c| c.chunk.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let system_msg = if contains_cjk(question) {
+            "你是企业知识库问答助手。严格规则：1.只用参考资料原文回答，禁止编造；2.简洁中文，直接给要点；3.编号列表3-5条；4.资料不足回复\"根据当前资料无法确认\"；5.不提及参考资料等内部术语；6.不加总结或补充"
+        } else {
+            "You are an enterprise knowledge base assistant. Rules: 1.Only use provided context, never fabricate; 2.Concise professional answers; 3.Numbered lists, 3-5 points max; 4.If insufficient, reply: I do not have enough information; 5.Do not mention context/reference terms; 6.No summary statements"
+        };
+
+        let prompt = format!("参考资料：\n{context_text}\n\n问题：{question}");
+
+        let mut request = self
+            .client
+            .post(self.config.endpoint_url())
+            .json(&serde_json::json!({
+                "model": self.config.model,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 1024,
+                "temperature": 0.1,
+                "stream": true
+            }));
+
+        if let Some(api_key) = &self.config.api_key {
+            let header = &self.config.auth_header;
+            let scheme = self.config.auth_scheme.as_deref().unwrap_or("Bearer");
+            let value = format!("{scheme} {api_key}");
+            request = request.header(header.as_str(), value.as_str());
+        }
+
+        for (name, value) in &self.config.extra_headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+
+        let response = match request.send() {
+            Ok(resp) if resp.status().is_success() => resp,
+            _ => return self.generate(question, context),
+        };
+
+        let mut reader = std::io::BufReader::new(response);
+        let mut line = String::new();
+        let mut full_answer = String::new();
+
+        while let Ok(bytes_read) = reader.read_line(&mut line) {
+            if bytes_read == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if let Some(payload) = trimmed.strip_prefix("data: ") {
+                let payload = payload.trim();
+                if payload == "[DONE]" {
+                    break;
+                }
+                if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(payload)
+                    && let Some(token) = chunk["choices"][0]["delta"]["content"].as_str()
+                    && !token.is_empty()
+                {
+                    full_answer.push_str(token);
+                    on_token(token)?;
+                }
+            }
+            line.clear();
+        }
+
+        if full_answer.is_empty() {
+            return self.generate(question, context);
+        }
+
+        Ok(full_answer)
+    }
 }
 
 pub struct ClaudeMessagesGenerator {
@@ -516,6 +624,84 @@ impl Generator for ClaudeMessagesGenerator {
             .to_string();
 
         Ok(answer)
+    }
+
+    fn generate_stream(
+        &self,
+        question: &str,
+        context: &[RetrievedChunk],
+        on_token: &mut dyn FnMut(&str) -> Result<(), GenerateError>,
+    ) -> Result<String, GenerateError> {
+        use std::io::BufRead;
+
+        let context_text = context
+            .iter()
+            .map(|c| c.chunk.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let system_msg = if contains_cjk(question) {
+            "你是企业知识库问答助手。严格规则：1.只用参考资料原文回答，禁止编造；2.简洁中文，直接给要点；3.编号列表3-5条；4.资料不足回复\"根据当前资料无法确认\"；5.不提及参考资料等内部术语；6.不加总结或补充"
+        } else {
+            "You are an enterprise knowledge base assistant. Rules: 1.Only use provided context, never fabricate; 2.Concise professional answers; 3.Numbered lists, 3-5 points max; 4.If insufficient, reply: I do not have enough information; 5.Do not mention context/reference terms; 6.No summary statements"
+        };
+
+        let prompt = format!("参考资料：\n{context_text}\n\n问题：{question}");
+
+        let mut request = self
+            .client
+            .post(self.config.endpoint_url())
+            .json(&serde_json::json!({
+                "model": self.config.model,
+                "max_tokens": self.config.max_tokens,
+                "system": system_msg,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": true
+            }));
+
+        if let Some(api_key) = &self.config.api_key {
+            request = request.header("x-api-key", api_key.as_str());
+            request = request.header("anthropic-version", self.config.anthropic_version.as_str());
+        }
+
+        for (name, value) in &self.config.extra_headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+
+        let response = match request.send() {
+            Ok(resp) if resp.status().is_success() => resp,
+            _ => return self.generate(question, context),
+        };
+
+        let mut reader = std::io::BufReader::new(response);
+        let mut line = String::new();
+        let mut full_answer = String::new();
+
+        while let Ok(bytes_read) = reader.read_line(&mut line) {
+            if bytes_read == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if let Some(payload) = trimmed.strip_prefix("data: ") {
+                let payload = payload.trim();
+                if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(payload)
+                    && let Some(token) = chunk["delta"]["text"].as_str()
+                    && !token.is_empty()
+                {
+                    full_answer.push_str(token);
+                    on_token(token)?;
+                }
+            }
+            line.clear();
+        }
+
+        if full_answer.is_empty() {
+            return self.generate(question, context);
+        }
+
+        Ok(full_answer)
     }
 }
 
