@@ -1083,6 +1083,7 @@
       var decoder = new TextDecoder();
       var buffer = "";
       var metadata = null;
+      var streamError = null;
 
       while (true) {
         var result = await reader.read();
@@ -1113,6 +1114,8 @@
               if (activeTypewriter) {
                 activeTypewriter.write(event.content);
               }
+            } else if (event.type === "error") {
+              streamError = event.content || t("queryFailed");
             } else if (event.type === "done") {
               // Stream complete
             }
@@ -1120,6 +1123,16 @@
             // Skip malformed JSON
           }
         }
+      }
+
+      if (streamError) {
+        if (activeTypewriter) {
+          activeTypewriter.flush();
+          activeTypewriter = null;
+        }
+        msg.remove();
+        appendMessage("error", t("errPrefix") + streamError);
+        return;
       }
 
       if (activeTypewriter) {

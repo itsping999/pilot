@@ -1,8 +1,14 @@
-use crate::config::{ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig};
+use crate::config::{
+    ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig, MODEL_NOT_CONFIGURED_MESSAGE,
+};
 use crate::models::RetrievedChunk;
 
 pub trait Generator: Send + Sync {
     fn name(&self) -> &str;
+    fn ensure_configured(&self) -> Result<(), GenerateError> {
+        Ok(())
+    }
+
     fn generate(&self, question: &str, context: &[RetrievedChunk])
     -> Result<String, GenerateError>;
 
@@ -20,18 +26,40 @@ pub trait Generator: Send + Sync {
 
 #[derive(Debug)]
 pub enum GenerateError {
+    ModelNotConfigured,
     Provider(String),
 }
 
 impl std::fmt::Display for GenerateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            GenerateError::ModelNotConfigured => write!(f, "{MODEL_NOT_CONFIGURED_MESSAGE}"),
             GenerateError::Provider(msg) => write!(f, "generator provider error: {msg}"),
         }
     }
 }
 
 impl std::error::Error for GenerateError {}
+
+pub struct UnconfiguredGenerator;
+
+impl Generator for UnconfiguredGenerator {
+    fn name(&self) -> &str {
+        "unconfigured"
+    }
+
+    fn ensure_configured(&self) -> Result<(), GenerateError> {
+        Err(GenerateError::ModelNotConfigured)
+    }
+
+    fn generate(
+        &self,
+        _question: &str,
+        _context: &[RetrievedChunk],
+    ) -> Result<String, GenerateError> {
+        Err(GenerateError::ModelNotConfigured)
+    }
+}
 
 pub struct ExtractiveGenerator;
 

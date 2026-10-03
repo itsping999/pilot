@@ -18,5 +18,5 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
-      - run: KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval.db cargo run --locked -- eval
+      - run: KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval.db KNOWLEDGE_PILOT_LLM_PROVIDER=extractive cargo run --locked -- eval
       - run: ./scripts/smoke.sh

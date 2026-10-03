@@ -17,7 +17,8 @@ Environment=KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama
 Environment=KNOWLEDGE_PILOT_EMBEDDING_BASE_URL=http://127.0.0.1:11434
 Environment=KNOWLEDGE_PILOT_EMBEDDING_PATH=/api/embed
 Environment=KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b
-Environment=KNOWLEDGE_PILOT_LLM_PROVIDER=extractive
+# Configure the LLM provider, model, and endpoint/API key in a service override.
+Environment=KNOWLEDGE_PILOT_LLM_PROVIDER=none
 Environment=KNOWLEDGE_PILOT_UI_ENABLED=true
 Environment=RUST_LOG=info
 ExecStart=/usr/local/bin/knowledge-pilot

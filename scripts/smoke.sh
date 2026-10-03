@@ -52,21 +52,42 @@ cat <<'EOF' > "$SKILLS_PATH"
 ]
 EOF
 
-KNOWLEDGE_PILOT_ADDR="$ADDR" \
-KNOWLEDGE_PILOT_DB_PATH="$DB_PATH" \
-KNOWLEDGE_PILOT_API_TOKEN="$TOKEN" \
-KNOWLEDGE_PILOT_SKILLS_PATH="$SKILLS_PATH" \
-KP_DB_SMOKE="sqlite://$BIZ_DB_PATH" \
-RUST_LOG=info \
-"$BIN" >/tmp/knowledge-pilot-smoke.log 2>&1 &
-SERVER_PID="$!"
+start_server() {
+  KNOWLEDGE_PILOT_ADDR="$ADDR" \
+  KNOWLEDGE_PILOT_DB_PATH="$DB_PATH" \
+  KNOWLEDGE_PILOT_API_TOKEN="$TOKEN" \
+  KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash \
+  KNOWLEDGE_PILOT_LLM_PROVIDER="$1" \
+  KNOWLEDGE_PILOT_RAG_MODE=traditional \
+  KNOWLEDGE_PILOT_SKILLS_PATH="$SKILLS_PATH" \
+  KP_DB_SMOKE="sqlite://$BIZ_DB_PATH" \
+  RUST_LOG=info \
+  "$BIN" >>/tmp/knowledge-pilot-smoke.log 2>&1 &
+  SERVER_PID="$!"
 
-for _ in $(seq 1 50); do
-  if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
+  for _ in $(seq 1 50); do
+    if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "smoke server failed to start" >&2
+  return 1
+}
+
+assert_model_not_configured() {
+  local endpoint="$1" payload="$2" output="$3" status
+  status="$(curl -sS -o "$output" -w '%{http_code}' \
+    -H "$AUTH_HEADER" -H 'content-type: application/json' \
+    -d "$payload" "$BASE_URL$endpoint")"
+  test "$status" = "503"
+  grep -q '"code":"model_not_configured"' "$output"
+  grep -q 'KNOWLEDGE_PILOT_LLM_MODEL' "$output"
+}
+
+# Extractive answers remain an explicit offline test mode.
+: >/tmp/knowledge-pilot-smoke.log
+start_server extractive
 
 curl -fsS "$BASE_URL/health" >/tmp/kp-smoke-health.json
 grep -q '"code":"ok"' /tmp/kp-smoke-health.json
@@ -145,34 +166,28 @@ grep -q '"code":"ok"' /tmp/kp-smoke-skill-test.json
 grep -q '"service_name":"user-service"' /tmp/kp-smoke-skill-test.json
 grep -q '"qps":1250' /tmp/kp-smoke-skill-test.json
 
-# Test Bot Direct Greeting
-curl -fsS \
-  -H "$AUTH_HEADER" \
-  -H 'content-type: application/json' \
-  -d '{"message":"你好"}' \
-  "$BASE_URL/bot/chat" >/tmp/kp-smoke-bot-direct.json
-grep -q '"code":"ok"' /tmp/kp-smoke-bot-direct.json
-grep -q '"action_taken":"direct"' /tmp/kp-smoke-bot-direct.json
+# No chat model means no bot routing, greetings, SQL actions, or stream tokens.
+assert_model_not_configured /bot/chat '{"message":"你好"}' /tmp/kp-smoke-bot-direct.json
+assert_model_not_configured /bot/chat '{"message":"查询服务指标"}' /tmp/kp-smoke-bot-skill.json
+assert_model_not_configured /bot/chat '{"message":"平台使用方法"}' /tmp/kp-smoke-bot-rag.json
+assert_model_not_configured /bot/chat/stream '{"message":"查询服务指标"}' /tmp/kp-smoke-bot-stream.txt
 
-# Test Bot Skill Execution
-curl -fsS \
-  -H "$AUTH_HEADER" \
-  -H 'content-type: application/json' \
-  -d '{"message":"查询服务指标"}' \
-  "$BASE_URL/bot/chat" >/tmp/kp-smoke-bot-skill.json
-grep -q '"code":"ok"' /tmp/kp-smoke-bot-skill.json
-grep -q '"action_taken":"skill"' /tmp/kp-smoke-bot-skill.json
-grep -q '"skill_used":"query_service_metrics"' /tmp/kp-smoke-bot-skill.json
-grep -q 'user-service' /tmp/kp-smoke-bot-skill.json
+# Unconfigured RAG must fail even with an existing document and query history.
+cleanup
+start_server none
+assert_model_not_configured /rag/query '{"question":"What does KnowledgePilot smoke test?","top_k":3}' /tmp/kp-smoke-query-unconfigured.json
+assert_model_not_configured /rag/query/stream '{"question":"What does KnowledgePilot smoke test?","top_k":3}' /tmp/kp-smoke-stream-unconfigured.json
+assert_model_not_configured /rag/query '{"question":"An unrelated unknown question"}' /tmp/kp-smoke-query-unknown.json
+assert_model_not_configured /bot/chat '{"message":"你好"}' /tmp/kp-smoke-bot-unconfigured.json
+assert_model_not_configured /bot/chat/stream '{"message":"查询服务指标"}' /tmp/kp-smoke-bot-stream-unconfigured.json
 
-# Test Bot Streaming
+# Document management and explicit skill testing still work without a chat model.
+curl -fsS -H "$AUTH_HEADER" "$BASE_URL/documents" >/tmp/kp-smoke-documents-unconfigured.json
+grep -q '"code":"ok"' /tmp/kp-smoke-documents-unconfigured.json
 curl -fsS \
-  -H "$AUTH_HEADER" \
-  -H 'content-type: application/json' \
-  -d '{"message":"查询服务指标"}' \
-  "$BASE_URL/bot/chat/stream" >/tmp/kp-smoke-bot-stream.txt
-grep -q '"action":"skill"' /tmp/kp-smoke-bot-stream.txt
-grep -q '"type":"data"' /tmp/kp-smoke-bot-stream.txt
-grep -q '"type":"done"' /tmp/kp-smoke-bot-stream.txt
+  -H "$AUTH_HEADER" -H 'content-type: application/json' \
+  -d '{"skill_name":"query_service_metrics","parameters":{"service_name":"user-service"}}' \
+  "$BASE_URL/skills/test" >/tmp/kp-smoke-skill-unconfigured.json
+grep -q '"qps":1250' /tmp/kp-smoke-skill-unconfigured.json
 
 echo "smoke_result ok"

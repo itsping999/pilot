@@ -11,6 +11,7 @@ use crate::db::open_database;
 use crate::embedding::{Embedder, HashEmbedder, OllamaEmbedder};
 use crate::generation::{
     ChatCompletionsGenerator, ClaudeMessagesGenerator, ExtractiveGenerator, Generator,
+    UnconfiguredGenerator,
 };
 use crate::rag::RagService;
 use crate::retrieval::SqliteRetriever;
@@ -84,7 +85,7 @@ fn build_bot_planner(config: &Config, profile: Arc<BotProfile>) -> Option<Arc<dy
             )))
         }
         _ => {
-            info!("Bot planner: rule-based router (no external LLM planner configured)");
+            warn!("Bot model is not configured; chat requests will return an error");
             None
         }
     }
@@ -161,7 +162,11 @@ fn is_probable_embedding_model(model: &str) -> bool {
 
 fn build_generator(config: &Config) -> Result<Arc<dyn Generator>, Box<dyn std::error::Error>> {
     match config.llm_provider {
-        LlmProvider::Extractive => Ok(Arc::new(ExtractiveGenerator)),
+        LlmProvider::Unconfigured => Ok(Arc::new(UnconfiguredGenerator)),
+        LlmProvider::Extractive if config.rag_mode != RagMode::Agentic => {
+            Ok(Arc::new(ExtractiveGenerator))
+        }
+        LlmProvider::Extractive => Ok(Arc::new(UnconfiguredGenerator)),
         LlmProvider::OpenAiCompatible | LlmProvider::Custom => {
             if is_chat_completions_usable(config) {
                 info!(
@@ -173,10 +178,10 @@ fn build_generator(config: &Config) -> Result<Arc<dyn Generator>, Box<dyn std::e
                 )))
             } else {
                 warn!(
-                    "LLM provider={} is not usable with current configuration; falling back to extractive generator",
+                    "LLM provider={} is not usable with current configuration; query requests will return an error",
                     config.chat_completions.name
                 );
-                Ok(Arc::new(ExtractiveGenerator))
+                Ok(Arc::new(UnconfiguredGenerator))
             }
         }
         LlmProvider::Claude => {
@@ -190,9 +195,9 @@ fn build_generator(config: &Config) -> Result<Arc<dyn Generator>, Box<dyn std::e
                 )))
             } else {
                 warn!(
-                    "Claude provider is not usable with current configuration; falling back to extractive generator"
+                    "Claude provider is not usable with current configuration; query requests will return an error"
                 );
-                Ok(Arc::new(ExtractiveGenerator))
+                Ok(Arc::new(UnconfiguredGenerator))
             }
         }
     }
@@ -226,10 +231,10 @@ fn build_query_planner(config: &Config) -> Option<Arc<dyn QueryPlanner>> {
         _ => {
             if config.rag_mode == RagMode::Agentic {
                 warn!(
-                    "KNOWLEDGE_PILOT_RAG_MODE=agentic requested but no usable LLM is configured; falling back to traditional RAG"
+                    "KNOWLEDGE_PILOT_RAG_MODE=agentic requested but no usable LLM planner is configured"
                 );
             } else {
-                info!("RAG mode: traditional; no usable LLM planner configured");
+                info!("RAG planner disabled; no usable LLM planner configured");
             }
             None
         }
@@ -237,9 +242,17 @@ fn build_query_planner(config: &Config) -> Option<Arc<dyn QueryPlanner>> {
 }
 
 fn is_chat_completions_usable(config: &Config) -> bool {
+    if config.chat_completions.model.trim().is_empty() {
+        return false;
+    }
+
     match config.llm_provider {
-        LlmProvider::Extractive => false,
-        LlmProvider::OpenAiCompatible => config.chat_completions.api_key.is_some(),
+        LlmProvider::Unconfigured | LlmProvider::Extractive => false,
+        LlmProvider::OpenAiCompatible => config
+            .chat_completions
+            .api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty()),
         LlmProvider::Custom => config.chat_completions.base_url_configured,
         LlmProvider::Claude => false,
     }
@@ -247,7 +260,13 @@ fn is_chat_completions_usable(config: &Config) -> bool {
 
 fn is_claude_messages_usable(config: &Config) -> bool {
     config.llm_provider == LlmProvider::Claude
-        && (config.claude.api_key.is_some() || config.claude.base_url_configured)
+        && !config.claude.model.trim().is_empty()
+        && (config
+            .claude
+            .api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty())
+            || config.claude.base_url_configured)
 }
 
 #[cfg(test)]
@@ -256,14 +275,102 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{build_rag_service, is_probable_embedding_model};
+    use super::{build_bot_service, build_rag_service, is_probable_embedding_model};
+    use crate::bot::BotError;
     use crate::config::{
         ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig, Config,
         EmbeddingProviderConfig, LlmProvider, RagMode,
     };
+    use crate::generation::GenerateError;
+    use crate::models::Document;
+    use crate::rag::RagError;
+
+    fn assert_model_required(config: &Config) {
+        let rag = build_rag_service(config).expect("service starts without a model");
+        assert_eq!(rag.generator_type(), "unconfigured");
+        // Both empty and populated knowledge bases must reject before retrieval,
+        // generation, callbacks, or history recording.
+        for populated in [false, true] {
+            if populated {
+                rag.add_document(Document {
+                    id: "model-required".to_string(),
+                    title: "Model configuration".to_string(),
+                    source: "test".to_string(),
+                    access_scope: "public".to_string(),
+                    text: "KnowledgePilot requires a configured model for question answering."
+                        .to_string(),
+                })
+                .expect("document management works without a chat model");
+            }
+            assert!(matches!(
+                rag.answer(
+                    "What does KnowledgePilot require for question answering?",
+                    5
+                ),
+                Err(RagError::Generate(GenerateError::ModelNotConfigured))
+            ));
+            let mut tokens = Vec::new();
+            let result = rag.answer_stream_with_scopes(
+                "What does KnowledgePilot require?",
+                5,
+                &[],
+                |token| {
+                    tokens.push(token.to_string());
+                    Ok(())
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(RagError::Generate(GenerateError::ModelNotConfigured))
+            ));
+            assert!(tokens.is_empty());
+            assert!(rag.list_query_history(100).unwrap().is_empty());
+        }
+        let bot = build_bot_service(config, rag).expect("bot service starts");
+        assert!(matches!(
+            bot.chat("你好", 5, &[]),
+            Err(BotError::ModelNotConfigured)
+        ));
+    }
 
     #[test]
-    fn openai_provider_without_key_falls_back_at_startup() {
+    fn unconfigured_provider_returns_model_error() {
+        let dir = tempdir().expect("create temp dir");
+        let mut config = test_config(dir.path().join("knowledge-pilot.db"));
+        config.llm_provider = LlmProvider::Unconfigured;
+        assert_model_required(&config);
+    }
+
+    #[test]
+    fn agentic_mode_requires_a_model_even_with_extractive_selected() {
+        let dir = tempdir().expect("create temp dir");
+        let mut config = test_config(dir.path().join("knowledge-pilot.db"));
+        config.rag_mode = RagMode::Agentic;
+        assert_model_required(&config);
+    }
+
+    #[test]
+    fn configured_credentials_without_model_return_error_for_each_provider() {
+        for provider in [
+            LlmProvider::OpenAiCompatible,
+            LlmProvider::Custom,
+            LlmProvider::Claude,
+        ] {
+            for model in ["", "   "] {
+                let dir = tempdir().expect("create temp dir");
+                let mut config = test_config(dir.path().join("knowledge-pilot.db"));
+                config.llm_provider = provider.clone();
+                config.chat_completions = test_chat_config(Some("test-key".to_string()), true);
+                config.chat_completions.model = model.to_string();
+                config.claude = test_claude_config(Some("test-key".to_string()), true);
+                config.claude.model = model.to_string();
+                assert_model_required(&config);
+            }
+        }
+    }
+
+    #[test]
+    fn openai_provider_without_key_returns_model_error() {
         let dir = tempdir().expect("create temp dir");
         let config = Config {
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -293,7 +400,7 @@ mod tests {
             bot_config_path: None,
         };
 
-        build_rag_service(&config).expect("service should fall back to traditional RAG");
+        assert_model_required(&config);
     }
 
     #[test]
@@ -327,11 +434,17 @@ mod tests {
             bot_config_path: None,
         };
 
-        build_rag_service(&config).expect("custom local provider should be accepted");
+        let rag = build_rag_service(&config).expect("custom local provider should be accepted");
+        assert_eq!(rag.generator_type(), "chat_completions");
+        rag.ensure_model_configured()
+            .expect("custom model is configured");
+        let bot = build_bot_service(&config, rag).expect("build configured bot");
+        bot.ensure_model_configured()
+            .expect("custom bot model is configured");
     }
 
     #[test]
-    fn claude_provider_without_key_falls_back_at_startup() {
+    fn claude_provider_without_key_returns_model_error() {
         let dir = tempdir().expect("create temp dir");
         let config = Config {
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -351,7 +464,7 @@ mod tests {
             bot_config_path: None,
         };
 
-        build_rag_service(&config).expect("service should fall back to traditional RAG");
+        assert_model_required(&config);
     }
 
     #[test]

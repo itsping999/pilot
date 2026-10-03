@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use log::error;
 use serde::Serialize;
 
+use crate::generation::GenerateError;
 use crate::rag::RagError;
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,8 @@ pub enum ErrorCode {
     EmbeddingProvider,
     /// LLM generation provider returned an error.
     GenerationProvider,
+    /// A required LLM provider or model configuration is missing.
+    ModelNotConfigured,
     /// Request was well-formed but rejected by business logic.
     Conflict,
     /// Rate limit exceeded (reserved for future use).
@@ -53,6 +56,7 @@ impl ErrorCode {
             Self::Internal => "internal_error",
             Self::EmbeddingProvider => "embedding_provider_error",
             Self::GenerationProvider => "generation_provider_error",
+            Self::ModelNotConfigured => "model_not_configured",
             Self::Conflict => "conflict",
             Self::RateLimited => "rate_limited",
         }
@@ -69,6 +73,7 @@ impl ErrorCode {
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::EmbeddingProvider => StatusCode::BAD_GATEWAY,
             Self::GenerationProvider => StatusCode::BAD_GATEWAY,
+            Self::ModelNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::Conflict => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
         }
@@ -85,6 +90,7 @@ impl ErrorCode {
             Self::Internal => "internal error",
             Self::EmbeddingProvider => "embedding provider error",
             Self::GenerationProvider => "generation provider error",
+            Self::ModelNotConfigured => crate::config::MODEL_NOT_CONFIGURED_MESSAGE,
             Self::Conflict => "resource conflict",
             Self::RateLimited => "rate limit exceeded",
         }
@@ -183,6 +189,10 @@ impl From<RagError> for ApiError {
                     ErrorCode::EmbeddingProvider.default_message(),
                 )
             }
+            RagError::Generate(GenerateError::ModelNotConfigured) => Self::new(
+                ErrorCode::ModelNotConfigured,
+                ErrorCode::ModelNotConfigured.default_message(),
+            ),
             RagError::Generate(error) => {
                 error!("generation error: {}", error);
                 Self::new(
@@ -197,6 +207,17 @@ impl From<RagError> for ApiError {
 impl From<crate::bot::BotError> for ApiError {
     fn from(error: crate::bot::BotError) -> Self {
         match error {
+            crate::bot::BotError::ModelNotConfigured => Self::new(
+                ErrorCode::ModelNotConfigured,
+                ErrorCode::ModelNotConfigured.default_message(),
+            ),
+            crate::bot::BotError::Planning(err) => {
+                error!("bot planning error: {err}");
+                Self::new(
+                    ErrorCode::GenerationProvider,
+                    ErrorCode::GenerationProvider.default_message(),
+                )
+            }
             crate::bot::BotError::Rag(err) => err.into(),
             crate::bot::BotError::Skill(err) => ApiError::bad_request(err.to_string()),
             crate::bot::BotError::Internal(msg) => ApiError::internal(msg),

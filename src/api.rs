@@ -386,6 +386,7 @@ async fn query_rag_stream(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     require_auth(&state, &headers)?;
     let question = clean_required(request.question, "question")?;
+    state.rag.ensure_model_configured()?;
     let top_k = request.top_k.unwrap_or(5).clamp(1, 20);
     let mut access_scopes = request.access_scopes;
     if let Some(access_scope) = request.access_scope
@@ -472,6 +473,7 @@ async fn chat_bot_stream(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     require_auth(&state, &headers)?;
     let message = clean_required(request.message, "message")?;
+    state.bot.ensure_model_configured()?;
     let top_k = request.top_k.unwrap_or(5).clamp(1, 20);
     let mut access_scopes = request.access_scopes;
     if let Some(access_scope) = request.access_scope
@@ -604,7 +606,7 @@ fn current_millis() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use tempfile::tempdir;
     use tower::ServiceExt;
@@ -615,6 +617,66 @@ mod tests {
         ChatCompletionsProviderConfig, ClaudeMessagesProviderConfig, Config, EmbeddingProvider,
         EmbeddingProviderConfig, LlmProvider, RagMode,
     };
+
+    #[tokio::test]
+    async fn missing_model_returns_503_json_for_normal_and_streaming_queries() {
+        let dir = tempdir().expect("create temp dir");
+        let mut cfg = test_config(dir.path().join("knowledge-pilot.db"));
+        cfg.llm_provider = LlmProvider::Unconfigured;
+        let rag = build_rag_service(&cfg).expect("build rag without model");
+        let bot = build_bot_service(&cfg, rag.clone()).expect("build bot without model");
+        let app = build_router(
+            rag.clone(),
+            bot,
+            false,
+            1024 * 1024,
+            Some("test-token".to_string()),
+            300,
+        );
+
+        for (uri, body) in [
+            (
+                "/rag/query",
+                r#"{"question":"How does KnowledgePilot work?"}"#,
+            ),
+            (
+                "/rag/query/stream",
+                r#"{"question":"How does KnowledgePilot work?"}"#,
+            ),
+            ("/bot/chat", r#"{"message":"你好"}"#),
+            ("/bot/chat/stream", r#"{"message":"查询服务指标"}"#),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::AUTHORIZATION, "Bearer test-token")
+                        .body(Body::from(body))
+                        .expect("build request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+            assert_eq!(
+                response.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            let bytes = to_bytes(response.into_body(), 4096)
+                .await
+                .expect("read error body");
+            let error: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON error body");
+            assert_eq!(error["code"], "model_not_configured");
+            assert_eq!(
+                error["message"],
+                crate::config::MODEL_NOT_CONFIGURED_MESSAGE
+            );
+            assert_eq!(error.as_object().unwrap().len(), 2);
+        }
+        assert!(rag.list_query_history(100).unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn rate_limited_responses_keep_cors_and_request_id_headers() {

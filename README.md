@@ -12,7 +12,7 @@ Human-facing project documentation is maintained in this `README.md`. Agent-faci
 - Deterministic hash embeddings for local development and repeatable tests.
 - Optional Ollama embedding models for stronger local semantic retrieval.
 - SQLite-backed in-process vector retrieval behind a `Retriever` trait.
-- Extractive answer generator behind a `Generator` trait.
+- Explicit extractive answer mode for offline RAG tests and evaluations.
 - Optional OpenAI-compatible chat completion generator.
 - Citation-backed RAG responses.
 - Answer confidence with explicit low-confidence insufficient-context fallback.
@@ -65,7 +65,7 @@ KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db \
 cargo run -- ingest eval/documents
 ```
 
-Without a chat model, KnowledgePilot still works with extractive answers pulled directly from retrieved document chunks.
+Without a configured chat model, the server can manage documents and run explicit skill tests, but RAG and bot chat requests return HTTP `503` with `code: "model_not_configured"`. Configure the same embedding and LLM settings when starting the server. For offline RAG tests only, explicitly set `KNOWLEDGE_PILOT_LLM_PROVIDER=extractive`; bot chat always requires a model.
 
 Open:
 
@@ -310,7 +310,8 @@ KNOWLEDGE_PILOT_EMBEDDING_PATH=/api/embed
 KNOWLEDGE_PILOT_EMBEDDING_MODEL=hash-256
 KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=false
 KNOWLEDGE_PILOT_RAG_MODE=auto
-KNOWLEDGE_PILOT_LLM_PROVIDER=extractive
+KNOWLEDGE_PILOT_LLM_PROVIDER=none
+KNOWLEDGE_PILOT_LLM_MODEL=
 KNOWLEDGE_PILOT_UI_ENABLED=true
 KNOWLEDGE_PILOT_RATE_LIMIT_RPM=300
 RUST_LOG=info
@@ -318,7 +319,7 @@ RUST_LOG=info
 
 Use `.env.example` as a local reference. The application reads environment variables directly; it does not require a `.env` loader. Deterministic local tests can still set `KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash`; production-like retrieval should use an embedding model such as `qwen3-embedding:0.6b` through Ollama.
 
-Embedding and answer generation are configured separately. `KNOWLEDGE_PILOT_EMBEDDING_*` controls how documents and questions are vectorized for retrieval; it must point to an embedding model, not a general chat model. When Ollama embedding is enabled, KnowledgePilot rejects common chat-model names such as `qwen3:8b` at startup. Use `KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=true` only for a custom embedding model that you have already verified through the embedding endpoint. `KNOWLEDGE_PILOT_LLM_*` controls optional answer generation and Agentic planning. Without a usable local or remote generator, KnowledgePilot still runs traditional RAG with extractive answers.
+Embedding and answer generation are configured separately. `KNOWLEDGE_PILOT_EMBEDDING_*` controls how documents and questions are vectorized for retrieval; it must point to an embedding model, not a general chat model. When Ollama embedding is enabled, KnowledgePilot rejects common chat-model names such as `qwen3:8b` at startup. Use `KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=true` only for a custom embedding model that you have already verified through the embedding endpoint. `KNOWLEDGE_PILOT_LLM_*` controls answer generation and Agentic planning. The default LLM provider is unconfigured, and no chat model name is supplied automatically. Missing or blank model names, unsupported providers, or incomplete provider settings make RAG and bot queries return HTTP `503` with `code: "model_not_configured"`, including streaming endpoints before SSE starts. The response keeps the `{code,message}` error envelope and identifies the required model settings. Document management and `/skills/test` remain available. `KNOWLEDGE_PILOT_LLM_PROVIDER=extractive` is an explicit offline RAG test mode and does not enable bot chat.
 
 For local semantic retrieval through Ollama:
 
@@ -333,15 +334,15 @@ cargo run -- ingest eval/documents
 
 Switching embedding providers or models requires re-ingesting documents so stored vectors match the active model. KnowledgePilot filters retrieval by embedding model name and vector dimension to avoid mixing incompatible embeddings.
 
-For an optional local chat generator through Ollama's OpenAI-compatible endpoint, set `KNOWLEDGE_PILOT_LLM_PROVIDER=custom`, `KNOWLEDGE_PILOT_LLM_BASE_URL=http://127.0.0.1:11434/v1`, `KNOWLEDGE_PILOT_LLM_CHAT_COMPLETIONS_PATH=/chat/completions`, and `KNOWLEDGE_PILOT_LLM_MODEL` to a locally installed chat model. This is separate from `KNOWLEDGE_PILOT_EMBEDDING_MODEL`.
+For a local chat generator through Ollama's OpenAI-compatible endpoint, set `KNOWLEDGE_PILOT_LLM_PROVIDER=custom`, `KNOWLEDGE_PILOT_LLM_BASE_URL=http://127.0.0.1:11434/v1`, `KNOWLEDGE_PILOT_LLM_CHAT_COMPLETIONS_PATH=/chat/completions`, and `KNOWLEDGE_PILOT_LLM_MODEL` to a locally installed chat model. This is separate from `KNOWLEDGE_PILOT_EMBEDDING_MODEL`.
 
-Set `KNOWLEDGE_PILOT_LLM_PROVIDER=openai-compatible` and provide `KNOWLEDGE_PILOT_LLM_API_KEY` to use an OpenAI-compatible `/chat/completions` provider. Legacy `KNOWLEDGE_PILOT_OPENAI_BASE_URL`, `KNOWLEDGE_PILOT_OPENAI_MODEL`, and `KNOWLEDGE_PILOT_OPENAI_API_KEY` names are still supported.
+Set `KNOWLEDGE_PILOT_LLM_PROVIDER=openai-compatible` and provide `KNOWLEDGE_PILOT_LLM_MODEL` and `KNOWLEDGE_PILOT_LLM_API_KEY` to use an OpenAI-compatible `/chat/completions` provider. Legacy `KNOWLEDGE_PILOT_OPENAI_BASE_URL`, `KNOWLEDGE_PILOT_OPENAI_MODEL`, and `KNOWLEDGE_PILOT_OPENAI_API_KEY` names are still supported.
 
 For a custom chat-completions-compatible provider, set `KNOWLEDGE_PILOT_LLM_PROVIDER=custom`, `KNOWLEDGE_PILOT_LLM_BASE_URL`, `KNOWLEDGE_PILOT_LLM_CHAT_COMPLETIONS_PATH`, and `KNOWLEDGE_PILOT_LLM_MODEL`. `KNOWLEDGE_PILOT_LLM_API_KEY` is optional for `custom`, so local providers that do not require authentication can be used. Use `KNOWLEDGE_PILOT_LLM_AUTH_HEADER`, `KNOWLEDGE_PILOT_LLM_AUTH_SCHEME`, and `KNOWLEDGE_PILOT_LLM_HEADERS_JSON` when a provider needs custom authentication or extra headers.
 
-For Claude, set `KNOWLEDGE_PILOT_LLM_PROVIDER=claude` and provide `KNOWLEDGE_PILOT_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`. The Claude provider uses Anthropic Messages format: `POST /v1/messages`, `x-api-key`, `anthropic-version`, top-level `system`, and `messages`. Override `KNOWLEDGE_PILOT_CLAUDE_BASE_URL`, `KNOWLEDGE_PILOT_CLAUDE_MESSAGES_PATH`, `KNOWLEDGE_PILOT_CLAUDE_MODEL`, `KNOWLEDGE_PILOT_CLAUDE_ANTHROPIC_VERSION`, and `KNOWLEDGE_PILOT_CLAUDE_MAX_TOKENS` as needed.
+For Claude, set `KNOWLEDGE_PILOT_LLM_PROVIDER=claude`, configure `KNOWLEDGE_PILOT_CLAUDE_MODEL` or `KNOWLEDGE_PILOT_LLM_MODEL`, and provide `KNOWLEDGE_PILOT_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`. The Claude provider uses Anthropic Messages format: `POST /v1/messages`, `x-api-key`, `anthropic-version`, top-level `system`, and `messages`. Override `KNOWLEDGE_PILOT_CLAUDE_BASE_URL`, `KNOWLEDGE_PILOT_CLAUDE_MESSAGES_PATH`, `KNOWLEDGE_PILOT_CLAUDE_MODEL`, `KNOWLEDGE_PILOT_CLAUDE_ANTHROPIC_VERSION`, and `KNOWLEDGE_PILOT_CLAUDE_MAX_TOKENS` as needed.
 
-With `KNOWLEDGE_PILOT_RAG_MODE=auto`, a configured LLM enables Agentic RAG planning automatically; without a usable LLM, the service keeps using traditional extractive RAG. Set `KNOWLEDGE_PILOT_RAG_MODE=traditional` to force the classic pipeline, or `agentic` to request Agentic RAG while still falling back to traditional RAG when no LLM is available.
+With `KNOWLEDGE_PILOT_RAG_MODE=auto`, a configured LLM enables Agentic RAG planning automatically. Set `KNOWLEDGE_PILOT_RAG_MODE=traditional` to skip planning while using the configured answer model, or `agentic` to request Agentic RAG. Without a usable LLM, query requests return a model configuration error. Bot actions always come from the configured model; missing configuration or bot planning failures return an error and never fall back to keyword routing or execute a SQL skill automatically.
 
 Agentic RAG uses two bounded retrieval stages. It first plans search queries from the original question, then inspects the retrieved evidence and issues follow-up searches for referenced concepts, sections, figures, tables, policies, or named items that need expansion.
 
@@ -435,10 +436,13 @@ Important design details:
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --locked
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash cargo run -- eval
+KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash \
+  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
+  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
 KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
   KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b \
-  cargo run -- eval
+  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
+  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
 ./scripts/smoke.sh
 ```
 

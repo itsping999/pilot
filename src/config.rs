@@ -3,6 +3,8 @@ use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+pub const MODEL_NOT_CONFIGURED_MESSAGE: &str = "未配置可用模型，请设置 KNOWLEDGE_PILOT_LLM_PROVIDER、KNOWLEDGE_PILOT_LLM_MODEL 和对应的服务地址或 API Key（Claude 也支持 KNOWLEDGE_PILOT_CLAUDE_MODEL）。";
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub addr: SocketAddr,
@@ -39,6 +41,7 @@ pub struct EmbeddingProviderConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LlmProvider {
+    Unconfigured,
     Extractive,
     OpenAiCompatible,
     Custom,
@@ -120,16 +123,8 @@ impl Config {
             &env::var("KNOWLEDGE_PILOT_RAG_MODE").unwrap_or_else(|_| "auto".to_string()),
         );
 
-        let llm_provider = match env::var("KNOWLEDGE_PILOT_LLM_PROVIDER")
-            .unwrap_or_else(|_| "extractive".to_string())
-            .to_lowercase()
-            .as_str()
-        {
-            "openai" | "openai-compatible" | "openai_compatible" => LlmProvider::OpenAiCompatible,
-            "custom" | "chat-completions" | "chat_completions" => LlmProvider::Custom,
-            "claude" | "anthropic" => LlmProvider::Claude,
-            _ => LlmProvider::Extractive,
-        };
+        let llm_provider =
+            LlmProvider::from_value(&env::var("KNOWLEDGE_PILOT_LLM_PROVIDER").unwrap_or_default());
 
         let chat_completions = ChatCompletionsProviderConfig::from_env(&llm_provider);
         let claude = ClaudeMessagesProviderConfig::from_env(&llm_provider);
@@ -166,6 +161,18 @@ impl Config {
             rate_limit_rpm,
             skills_path,
             bot_config_path,
+        }
+    }
+}
+
+impl LlmProvider {
+    fn from_value(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "extractive" => Self::Extractive,
+            "openai" | "openai-compatible" | "openai_compatible" => Self::OpenAiCompatible,
+            "custom" | "chat-completions" | "chat_completions" => Self::Custom,
+            "claude" | "anthropic" => Self::Claude,
+            _ => Self::Unconfigured,
         }
     }
 }
@@ -229,6 +236,7 @@ impl ChatCompletionsProviderConfig {
         let base_url_configured = base_url.is_some();
         let base_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let default_name = match provider {
+            LlmProvider::Unconfigured => "unconfigured",
             LlmProvider::Extractive => "extractive",
             LlmProvider::OpenAiCompatible => "openai-compatible",
             LlmProvider::Custom => "custom",
@@ -247,7 +255,7 @@ impl ChatCompletionsProviderConfig {
                 "KNOWLEDGE_PILOT_OPENAI_API_KEY",
             ]),
             model: first_env(&["KNOWLEDGE_PILOT_LLM_MODEL", "KNOWLEDGE_PILOT_OPENAI_MODEL"])
-                .unwrap_or_else(|| "gpt-4.1-mini".to_string()),
+                .unwrap_or_default(),
             auth_header: first_env(&["KNOWLEDGE_PILOT_LLM_AUTH_HEADER"])
                 .unwrap_or_else(|| "Authorization".to_string()),
             auth_scheme: auth_scheme_from_env(),
@@ -289,7 +297,7 @@ impl ClaudeMessagesProviderConfig {
                 "ANTHROPIC_API_KEY",
             ]),
             model: first_env(&["KNOWLEDGE_PILOT_CLAUDE_MODEL", "KNOWLEDGE_PILOT_LLM_MODEL"])
-                .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
+                .unwrap_or_default(),
             anthropic_version: first_env(&[
                 "KNOWLEDGE_PILOT_CLAUDE_ANTHROPIC_VERSION",
                 "KNOWLEDGE_PILOT_LLM_ANTHROPIC_VERSION",
@@ -359,6 +367,80 @@ mod tests {
     };
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn llm_provider_requires_explicit_selection() {
+        for value in ["", "   ", "unexpected"] {
+            assert_eq!(LlmProvider::from_value(value), LlmProvider::Unconfigured);
+        }
+        assert_eq!(
+            LlmProvider::from_value("extractive"),
+            LlmProvider::Extractive
+        );
+        assert_eq!(LlmProvider::from_value(" Custom "), LlmProvider::Custom);
+        assert_eq!(
+            LlmProvider::from_value("openai"),
+            LlmProvider::OpenAiCompatible
+        );
+        assert_eq!(LlmProvider::from_value("anthropic"), LlmProvider::Claude);
+    }
+
+    #[test]
+    fn chat_models_require_configuration_and_preserve_legacy_aliases() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let keys = [
+            "KNOWLEDGE_PILOT_LLM_MODEL",
+            "KNOWLEDGE_PILOT_OPENAI_MODEL",
+            "KNOWLEDGE_PILOT_CLAUDE_MODEL",
+        ];
+        let previous: Vec<_> = keys.iter().map(std::env::var_os).collect();
+        unsafe {
+            for key in keys {
+                std::env::remove_var(key);
+            }
+        }
+        let chat = ChatCompletionsProviderConfig::from_env(&LlmProvider::Custom);
+        let claude = ClaudeMessagesProviderConfig::from_env(&LlmProvider::Claude);
+        assert!(chat.model.is_empty());
+        assert!(claude.model.is_empty());
+
+        unsafe {
+            std::env::set_var("KNOWLEDGE_PILOT_LLM_MODEL", "  ");
+        }
+        assert!(
+            ChatCompletionsProviderConfig::from_env(&LlmProvider::Custom)
+                .model
+                .is_empty()
+        );
+        assert!(
+            ClaudeMessagesProviderConfig::from_env(&LlmProvider::Claude)
+                .model
+                .is_empty()
+        );
+
+        unsafe {
+            std::env::set_var("KNOWLEDGE_PILOT_OPENAI_MODEL", " legacy-model ");
+            std::env::set_var("KNOWLEDGE_PILOT_CLAUDE_MODEL", " claude-model ");
+        }
+        assert_eq!(
+            ChatCompletionsProviderConfig::from_env(&LlmProvider::OpenAiCompatible).model,
+            "legacy-model"
+        );
+        assert_eq!(
+            ClaudeMessagesProviderConfig::from_env(&LlmProvider::Claude).model,
+            "claude-model"
+        );
+
+        unsafe {
+            for (key, value) in keys.iter().zip(previous) {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
 
     #[test]
     fn rag_mode_parses_known_values() {

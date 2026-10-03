@@ -20,7 +20,7 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 - `src/ingestion.rs` - Markdown-title extraction, chunking, stable chunk ids, section metadata.
 - `src/embedding.rs` - `Embedder` trait, deterministic hash embedder, Ollama embedder, vector encoding.
 - `src/retrieval.rs` - `Retriever` trait and current SQLite-backed in-process vector scan with lexical/title boosts.
-- `src/generation.rs` - `Generator` trait, extractive generator, OpenAI-compatible generator, Claude generator.
+- `src/generation.rs` - `Generator` trait, unconfigured-model errors, explicit offline extractive generator, OpenAI-compatible generator, Claude generator.
 - `src/agent.rs` - optional Agentic RAG query planning and follow-up planning.
 - `src/skills.rs` - predefined parameterized SQL skills, read-only SQL validation, MySQL & SQLite connection pooling.
 - `src/bot.rs` - unified platform assistant bot orchestrating RAG documentation Q&A and SQL skills execution.
@@ -44,7 +44,7 @@ KnowledgePilot is a single-binary Rust 2024 embedded RAG service. It keeps the p
 | Eval gate | `eval/cases.json`, `eval/documents/` | Current fixture has 91 Markdown docs and 184 cases, including `eval/documents/diverse/`. |
 | Static UI | `static/index.html`, `static/qa.html`, `static/app.css`, `static/app.js`, `src/ui.rs` | UI is embedded with `include_str!`; rebuild before browser/smoke verification. |
 | Deployment | `Dockerfile`, `compose.yaml`, `deploy/systemd/knowledge-pilot.service`, `.github/workflows/ci.yml` | These files contain deploy-specific env overrides; inspect all of them when config changes. |
-| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, detailed health, JSON ingest/update, chunks, multipart upload, query, SSE stream, history, delete, skills, bot chat. |
+| Smoke verification | `scripts/smoke.sh` | Starts a local service with a bearer token and checks auth, detailed health, JSON ingest/update, chunks, multipart upload, explicit extractive query/SSE, history, delete, skills, and missing-model errors for normal/streaming RAG and bot chat. |
 
 ## Current API Surface
 
@@ -89,7 +89,8 @@ KNOWLEDGE_PILOT_EMBEDDING_BASE_URL=http://127.0.0.1:11434
 KNOWLEDGE_PILOT_EMBEDDING_PATH=/api/embed
 KNOWLEDGE_PILOT_EMBEDDING_MODEL=hash-256 or qwen3-embedding:0.6b
 KNOWLEDGE_PILOT_RAG_MODE=auto
-KNOWLEDGE_PILOT_LLM_PROVIDER=extractive
+KNOWLEDGE_PILOT_LLM_PROVIDER=none
+KNOWLEDGE_PILOT_LLM_MODEL=
 KNOWLEDGE_PILOT_UI_ENABLED=true
 KNOWLEDGE_PILOT_RATE_LIMIT_RPM=300
 RUST_LOG=info
@@ -108,8 +109,8 @@ Changing embedding provider/model requires re-ingesting documents into a databas
 | Unit tests | `cargo test` or CI-style `cargo test --locked` |
 | Build | `cargo build` |
 | Release build | `cargo build --release --locked` |
-| Hash eval | `KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-hash.db KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash cargo run -- eval` |
-| Ollama eval | `KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-ollama.db KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b cargo run -- eval` |
+| Hash eval | `KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-hash.db KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash KNOWLEDGE_PILOT_LLM_PROVIDER=extractive KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval` |
+| Ollama eval | `KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-ollama.db KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b KNOWLEDGE_PILOT_LLM_PROVIDER=extractive KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval` |
 | Ingest files | `KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-ingest.db cargo run -- ingest README.md eval/documents` |
 | Smoke test | `./scripts/smoke.sh` |
 | Docker Compose | `docker compose up --build -d` |
@@ -170,6 +171,7 @@ Ollama eval requires a running Ollama service and the `qwen3-embedding:0.6b` mod
 - Human-facing documentation belongs in `README.md`; agent-facing implementation rules belong in `AGENTS.md`.
 - Avoid adding parallel docs such as `docs/`, `openspec/`, new changelogs, or contribution/security docs unless explicitly requested. Existing summary files are historical; keep active guidance in `README.md` and `AGENTS.md`.
 - Keep the embedded SQLite baseline working; sqlite-vec is only the planned file-database upgrade path.
+- Missing/incomplete LLM configuration must fail before retrieval, streaming callbacks, SQL routing, or history recording with HTTP 503 `model_not_configured`. Never restore automatic extractive fallback, default chat-model names, or rule-based bot routing. Bot planning errors propagate as provider errors. Explicit `extractive` is only for offline traditional RAG tests/evals; bot chat and Agentic mode still require a model.
 - Keep access-scope enforcement at the store/retriever boundary. Empty internal scope sets must fail closed; API queries include `public` by default.
 - Preserve chunk metadata: document title, source, nearest Markdown section, access scope, and stable chunk id.
 - Store query history with citations JSON and confidence fields for audit review.
@@ -188,11 +190,13 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-hash.db \
   KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash \
-  cargo run -- eval
+  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
+  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
 KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval-ollama.db \
   KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
   KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b \
-  cargo run -- eval
+  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
+  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
 ./scripts/smoke.sh
 ```
 

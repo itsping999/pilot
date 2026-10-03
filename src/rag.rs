@@ -99,6 +99,11 @@ impl RagService {
         self.generator.name()
     }
 
+    pub fn ensure_model_configured(&self) -> Result<(), RagError> {
+        self.generator.ensure_configured()?;
+        Ok(())
+    }
+
     pub fn answer(&self, question: &str, top_k: usize) -> Result<RagResponse, RagError> {
         self.answer_with_scopes(question, top_k, &[])
     }
@@ -109,6 +114,7 @@ impl RagService {
         top_k: usize,
         access_scopes: &[String],
     ) -> Result<RagResponse, RagError> {
+        self.ensure_model_configured()?;
         let allowed_scopes = allowed_access_scopes(access_scopes);
         if let Some(planner) = &self.query_planner {
             return self.answer_agentic(question, top_k, planner.as_ref(), &allowed_scopes);
@@ -127,6 +133,7 @@ impl RagService {
     where
         F: FnMut(&str) -> Result<(), GenerateError>,
     {
+        self.ensure_model_configured()?;
         let allowed_scopes = allowed_access_scopes(access_scopes);
         let context = if let Some(planner) = &self.query_planner {
             self.retrieve_agentic_context(question, top_k, planner.as_ref(), &allowed_scopes)?
