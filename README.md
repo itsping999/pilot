@@ -1,460 +1,264 @@
-# KnowledgePilot
+# Pilot
 
-KnowledgePilot is a lightweight embedded RAG service for traditional and optional Agentic retrieval-augmented question answering. It runs as one Rust binary with SQLite persistence, configurable embeddings, citation-backed answers, and a small built-in web UI.
+A session-isolated Agent API service built with Pi SDK, TypeScript, Node.js 26+, and embedded SQLite. It provides standard `SKILL.md` loading, administrator-configured MCP tools, persistent conversations, streamed responses, and run cancellation.
 
-The project keeps the production path embedded first: no external vector database, message queue, object store, or web asset build step is required.
-
-Human-facing project documentation is maintained in this `README.md`. Agent-facing implementation guidance and repository rules are maintained in `AGENTS.md`.
-
-## Features
-
-- Embedded SQLite storage for documents, chunks, embeddings, and query history.
-- Deterministic hash embeddings for local development and repeatable tests.
-- Optional Ollama embedding models for stronger local semantic retrieval.
-- SQLite-backed in-process vector retrieval behind a `Retriever` trait.
-- Explicit extractive answer mode for offline RAG tests and evaluations.
-- Optional OpenAI-compatible chat completion generator.
-- Citation-backed RAG responses.
-- Answer confidence with explicit low-confidence insufficient-context fallback.
-- Clickable references that open original documents and highlight cited chunks.
-- Protected query history API for lightweight audit review.
-- Permission-scoped retrieval with `public` as the default document scope.
-- Document management APIs for create, list, detail, chunks, and delete.
-- Enterprise platform assistant bot coordinating RAG documentation Q&A and live database SQL skills.
-- Predefined parameterized SQL skills with MySQL and SQLite connection pools and strict read-only safety.
-- Text file upload for `.md`, `.markdown`, and `.txt`.
-- Local ingest command for files and directories.
-- Separate upload and Q&A pages at `/upload` and `/qa`.
-- Optional built-in UI that can be disabled for API-only deployments.
-- Docker, Docker Compose, systemd, and GitHub Actions CI assets.
-
-## Stack
-
-```text
-Rust 2024
-Axum
-SQLite / rusqlite & MySQL / mysql
-serde / serde_json
-log / env_logger
-Vanilla HTML/CSS/JS
-```
-
-The planned file-database vector upgrade path is `sqlite-vec`. The current implementation keeps vector search in process so the service can be deployed and tested without native SQLite extension loading.
+The `haiwell123` portal owns the user-facing chat interface. Its FastAPI backend calls this service over HTTP/SSE and supplies a trusted user identity. The Agent service owns conversations, model context, workspaces, Skills, and MCP connection lifecycle. RAG is an external capability maintained separately; this service contains no embedded retrieval, document-management API, SQL executor, or chat frontend.
 
 ## Quick Start
 
 ```bash
-cargo test
-cargo run
+npm ci --ignore-scripts
+npm run build
+npm start
 ```
 
-### Recommended: Local Ollama Setup
+The service defaults to `127.0.0.1:8080` and `./data/agent`. `/health` works without model configuration. Protected APIs need `AGENT_API_TOKEN` and a trusted principal. Sending messages additionally requires an explicitly configured generation model; missing configuration returns 503 `model_not_configured` before message/run writes or MCP startup.
 
-For the best experience, install [Ollama](https://ollama.com) and pull both an embedding model (for retrieval) and a chat model (for answer generation):
+`npm start` reads an optional `.env` with Node's native `--env-file-if-exists`. Use `.env.example` as a reference. If a private `.env` already exists, preserve it and add the `AGENT_` settings; do not overwrite it.
 
-```bash
-ollama pull qwen3-embedding:0.6b
-ollama pull qwen2.5:1.5b
+Configure a service-only token and a real model, for example through an OpenAI-compatible local endpoint:
 
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
-KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b \
-KNOWLEDGE_PILOT_LLM_PROVIDER=custom \
-KNOWLEDGE_PILOT_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
-KNOWLEDGE_PILOT_LLM_MODEL=qwen2.5:1.5b \
-KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db \
-cargo run -- ingest eval/documents
+```text
+AGENT_API_TOKEN=<a-generated-service-token>
+AGENT_LLM_PROVIDER=custom
+AGENT_LLM_BASE_URL=http://127.0.0.1:11434/v1
+AGENT_LLM_MODEL=<an-installed-chat-model>
 ```
 
-Without a configured chat model, the server can manage documents and run explicit skill tests, but RAG and bot chat requests return HTTP `503` with `code: "model_not_configured"`. Configure the same embedding and LLM settings when starting the server. For offline RAG tests only, explicitly set `KNOWLEDGE_PILOT_LLM_PROVIDER=extractive`; bot chat always requires a model.
+Replace the placeholders before starting. There is no default chat model or extractive fallback. Anthropic-compatible models use `AGENT_LLM_PROVIDER=anthropic`, an explicit model, and `AGENT_LLM_API_KEY`.
 
-Open:
+## Caller Identity and Isolation
 
-- Upload page: <http://127.0.0.1:8080/upload>
-- Q&A page: <http://127.0.0.1:8080/qa>
-- Health check: <http://127.0.0.1:8080/health>
-
-## API Example
-
-```bash
-curl -s http://127.0.0.1:8080/health
-
-curl -s -X POST http://127.0.0.1:8080/documents \
-  -H 'content-type: application/json' \
-  -d '{"title":"RAG roadmap","text":"KnowledgePilot starts with traditional RAG and keeps interfaces ready for Agentic RAG.","source":"demo","access_scope":"public"}'
-
-curl -s http://127.0.0.1:8080/documents
-
-curl -s -X POST http://127.0.0.1:8080/documents/upload \
-  -F 'file=@README.md'
-
-curl -s -X POST http://127.0.0.1:8080/rag/query \
-  -H 'content-type: application/json' \
-  -d '{"question":"How does KnowledgePilot evolve?","top_k":3,"access_scopes":["public"]}'
-
-curl -s http://127.0.0.1:8080/rag/history?limit=20
-```
-
-## API Reference
-
-Successful responses use a shared JSON envelope:
-
-```json
-{
-  "code": "ok",
-  "message": "ok",
-  "data": {}
-}
-```
-
-When `KNOWLEDGE_PILOT_API_TOKEN` is configured, document and RAG endpoints require `Authorization: Bearer <token>`.
-
-Endpoints:
+Every `/api/v1` request requires:
 
 ```http
-GET /health
-GET /health/detail
-GET /documents
-POST /documents
-POST /documents/upload
-GET /documents/{id}
-PUT /documents/{id}
-GET /documents/{id}/chunks
-DELETE /documents/{id}
-POST /rag/query
-POST /rag/query/stream
-GET /rag/history
-POST /bot/chat
-POST /bot/chat/stream
-GET /skills
-POST /skills/test
-GET /upload
-GET /qa
+Authorization: Bearer <service-token>
+X-User-Id: <trusted-user-or-anonymous-id>
+X-Tenant-Id: <trusted-tenant-id>
 ```
 
-Create or replace a document:
+`X-Tenant-Id` defaults to `default`. IDs accept 1–128 ASCII letters/digits and `.`, `_`, `:`, `@`, `+`, `-`, beginning with a letter or digit.
 
-```bash
-curl -s -X POST http://127.0.0.1:8080/documents \
-  -H 'content-type: application/json' \
-  -d '{
-    "id": "optional-stable-id",
-    "title": "RAG roadmap",
-    "source": "README.md",
-    "access_scope": "public",
-    "text": "KnowledgePilot starts with traditional RAG..."
-  }'
+The bearer token authenticates a trusted application backend, not a browser user. The portal backend must authenticate its user or issue a server-side anonymous identity, overwrite these headers from that trusted context, and keep the service token out of the browser. Do not forward browser-supplied identity headers as authoritative. The Agent does not implement the portal's login system.
+
+The recommended path is:
+
+```mermaid
+flowchart LR
+    UI[haiwell123 Vue] --> Portal[haiwell123 FastAPI]
+    Portal -->|HTTP / SSE| Agent[Agent API with Pi SDK]
+    Agent --> Skills[Configured Skills]
+    Agent --> MCP[Authorized MCP servers]
 ```
 
-Upload a UTF-8 text file:
+- Sessions and runs use opaque service-generated UUIDs. All operations check tenant/user ownership, including history, SSE replay, cancellation, and deletion. Missing and unowned resources both return 404.
+- Each conversation has a separate Pi `AgentSession`, `SessionManager`, resource loader, settings, workspace, and MCP connections. Common immutable model configuration and administrator-published read-only Skills can be shared.
+- Same-session reentry returns 409 `session_busy`; different conversations can run concurrently. Cancellation targets an exact run, so cancelling an old run cannot stop a newer one.
+- Conversations survive runtime eviction and service restarts. A crash marks unfinished runs `interrupted`; it does not automatically replay tools. Loss of an established Pi context file returns a storage error rather than silently resetting the conversation.
+- One Agent process owns a data directory at a time, enforced by a SQLite process lock. Scale separate instances with separate data directories; shared multi-process session storage is not part of this version.
+- The service does not enable browser CORS or expose service credentials to the portal UI; use the portal backend proxy.
 
-```bash
-curl -s -X POST http://127.0.0.1:8080/documents/upload \
-  -F 'file=@README.md' \
-  -F 'source=README.md' \
-  -F 'access_scope=public'
-```
+## HTTP Contract
 
-Query RAG:
+Success: `{code:"ok",message:"ok",data:...}`. Error: `{code,message}` with an appropriate HTTP status. Responses include a generated `X-Request-Id`.
 
-```bash
-curl -s -X POST http://127.0.0.1:8080/rag/query \
-  -H 'content-type: application/json' \
-  -d '{"question":"How does KnowledgePilot evolve?","top_k":3,"access_scopes":["team-a"]}'
-```
+| Method | Path                                         | Behavior                                                                  |
+| ------ | -------------------------------------------- | ------------------------------------------------------------------------- |
+| GET    | `/health`                                    | Public basic health                                                       |
+| GET    | `/api/v1/health/detail`                      | Model configuration and permitted capability counts                       |
+| GET    | `/api/v1/skills`                             | Configured Skill names/descriptions, no internal paths                    |
+| GET    | `/api/v1/mcp/servers`                        | MCP servers permitted for the caller; no URLs/commands/credentials        |
+| POST   | `/api/v1/sessions`                           | Create an owned conversation, HTTP 201                                    |
+| GET    | `/api/v1/sessions`                           | List this principal's conversations                                       |
+| GET    | `/api/v1/sessions/{id}`                      | Metadata and `active_run_id`                                              |
+| DELETE | `/api/v1/sessions/{id}`                      | Soft-delete an idle conversation                                          |
+| GET    | `/api/v1/sessions/{id}/messages`             | Public user/assistant history; `limit` defaults to 100, clamped to 1–1000 |
+| POST   | `/api/v1/sessions/{id}/messages`             | Start asynchronous execution, HTTP 202 with `{run}`                       |
+| POST   | `/api/v1/sessions/{id}/messages/stream`      | Start execution and stream its events                                     |
+| GET    | `/api/v1/sessions/{id}/runs/{run_id}`        | Run status, error code, and final `reply` when available                  |
+| GET    | `/api/v1/sessions/{id}/runs/{run_id}/events` | Stream/replay owned events; optional `after` sequence                     |
+| POST   | `/api/v1/sessions/{id}/runs/{run_id}/cancel` | Request cancellation of that exact run                                    |
 
-Documents default to the `public` access scope. Queries always include `public` and may add one or more extra scopes with `access_scope` or `access_scopes`. Restricted documents are retrieved only when their scope is included in the query request.
+Create a conversation with `{ "title": "Operations question" }`; title is optional, limited to 200 characters. Public metadata contains `id`, `title`, `created_at`, and `updated_at`. GET/list responses additionally contain `active_run_id`. Internal owner fields and Pi paths are not returned.
 
-List recent RAG query history:
-
-```bash
-curl -s 'http://127.0.0.1:8080/rag/history?limit=20'
-```
-
-`limit` defaults to `20` and is clamped to `1..100`. Query history returns the recorded question, generated answer, citations, confidence, and creation time. It is protected by the same bearer token as document and RAG APIs.
-
-RAG citations include readable source metadata:
+Message requests use:
 
 ```json
 {
-  "document_id": "doc-1",
-  "chunk_id": "doc-1:0",
-  "document_title": "RAG roadmap",
-  "section": "Architecture",
-  "source": "README.md",
-  "access_scope": "public",
-  "score": 0.75
+  "message": "Explain the available business tools",
+  "skill": "service-help"
 }
 ```
 
-RAG query responses also include answer confidence:
+`message` is required and non-empty. `skill` is optional and selects a configured Skill explicitly; otherwise Pi can load relevant skills on demand. Unsupported request fields are rejected. Public history retains the original user text rather than replacing it with expanded Skill instructions.
+
+The ordinary POST starts a run without holding a connection. Read its status/reply or attach to its events. Cancellation is asynchronous; its response may still say `running` while cancellation settles. Cancellation stops further execution and outstanding requests where supported, but cannot undo an external operation already performed.
+
+Soft deletion removes the conversation from all normal API reads and closes its runtime. On-disk history is retained for operator-controlled retention/backup; it is not a physical erase operation. A running conversation must be cancelled and settle before deletion.
+
+### SSE
+
+Events are delivered as:
+
+```text
+id: <run-id>:<sequence>
+event: token
+data: {"type":"token","sequence":2,"session_id":"...","run_id":"...","content":"..."}
+```
+
+Event types:
+
+- `run_started`: run/session IDs and initial status.
+- `token`: incremental assistant text in `content`.
+- `tool_start` / `tool_end`: tool name, call ID, and error flag; raw arguments/credentials are not exposed.
+- `error`: stable code and sanitized message.
+- `done`: terminal status (`completed`, `failed`, `cancelled`, or `interrupted`).
+
+Events are persisted with monotonic per-run sequence numbers. GET events with `after=N` replays newer events and follows a running execution. Disconnecting the stream does not cancel the run; use the explicit cancellation API. Before headers are sent, validation/auth/model errors use normal HTTP JSON errors. After streaming starts, failures use `error` and `done` events.
+
+The portal needs a streaming reader for chat. A JSON helper that awaits the full response body will not show incremental events. Configure reverse proxies to preserve streaming and disable buffering; the Agent sends `X-Accel-Buffering: no`.
+
+Common errors: 400 `bad_request`/`principal_required`, 401 `unauthorized`, 404 `not_found`, 409 `session_busy`, 413 `payload_too_large`, 503 `auth_not_configured`/`model_not_configured`/`capacity_limited`, and run errors such as `mcp_unavailable`, `model_provider_error`, `run_timeout`, `run_limit_exceeded`, `session_storage_error`, and `service_restarted`.
+
+## Skills
+
+Place administrator-published skill packages under `AGENT_SKILLS_DIR` (default `./skills`):
+
+```text
+skills/
+  service-help/
+    SKILL.md
+    references/
+    assets/
+```
+
+Use the Agent Skills format with `name` and `description` frontmatter. Pi advertises metadata and reads the full Skill only when needed. The bundled `service-help` is a minimal example.
+
+The read tool is confined to configured Skill resources and the current conversation's workspace, including realpath/symlink checks and a 1 MiB file limit. Common Skills are read-only application configuration. Shell, edit, write, arbitrary scripts, and SDK management commands are not exposed through chat. A Skill that needs executable code should call an administrator-provided MCP tool or an explicitly added confined tool; a `SKILL.md` instruction alone does not grant execution permissions.
+
+No home-directory/parent-project Skills, extensions, credentials, models, or context files are automatically discovered. File-published Skill changes are activated by sending `SIGHUP`. Skill and support files are copied into immutable snapshots, so an active run keeps its original instructions even if an administrator edits the source. Disabled Skills and their support files are absent from the active read boundary. Personal mutable Skill storage and automatic learning are outside this version.
+
+## MCP
+
+Create a private `config/mcp.json` from `config/mcp.example.json`, or set `AGENT_MCP_CONFIG_PATH`. The file uses the familiar `mcpServers` shape plus an application-level `allow` policy. Missing `allow` denies all principals. `allow:"*"` explicitly permits every authenticated principal; arrays permit exact tenant/user pairs.
+
+HTTP example:
 
 ```json
 {
-  "confidence": {
-    "level": "high",
-    "score": 0.82,
-    "reason": "strong_retrieval_support"
-  }
-}
-```
-
-When retrieved context is weak, KnowledgePilot returns a low-confidence answer instead of inventing unsupported details. Chinese questions receive a Chinese insufficient-context response, and returned citations remain available for manual checking.
-
-Errors use the same `code` and `message` shape:
-
-```json
-{
-  "code": "not_found",
-  "message": "document not found"
-}
-```
-
-## Enterprise Platform Assistant Bot & SQL Skills
-
-KnowledgePilot includes a unified intelligent assistant bot that blends **Platform Knowledge Base (RAG)** and **Live Enterprise Data Queries (Predefined SQL Skills)** in a single conversation flow (similar to intelligent customer service bots):
-
-- **Platform how-tos, manuals, policies, troubleshooting**: seamlessly handled by the embedded RAG engine.
-- **Real-time business data (user accounts, service metrics, alerts, orders)**: routed to predefined, parameterized SQL skills querying MySQL or SQLite.
-- **Safety**: SQL queries are strictly validated to be read-only (`SELECT`/`WITH`/`EXPLAIN`). All mutation statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, etc.) and multi-statement execution are rejected. Limit clauses are automatically bounded.
-
-### Database Credentials Configuration
-
-Connection strings are configured via environment variables matching `KP_DB_<CONNECTION_REF>`:
-
-```bash
-# MySQL for enterprise production
-export KP_DB_PRIMARY="mysql://user:password@127.0.0.1:3306/platform_db"
-export KP_DB_ANALYTICS="mysql://user:password@127.0.0.1:3306/analytics_db"
-
-# SQLite for local development or testing
-export KP_DB_LOCAL="sqlite://./data/business.db"
-```
-
-### Defining Skills (`config/skills.json`)
-
-Skills are defined in JSON (default path `./config/skills.json` or configured via `KNOWLEDGE_PILOT_SKILLS_PATH`). See [`config/skills.example.json`](config/skills.example.json) for a complete template:
-
-```json
-[
-  {
-    "name": "query_user_info",
-    "description": "查询企业平台用户基本信息、账户状态与部门",
-    "connection_ref": "PRIMARY",
-    "sql_template": "SELECT id, username, email, department, status FROM users WHERE id = :user_id OR username = :username LIMIT 1",
-    "parameters": [
-      {
-        "name": "user_id",
-        "param_type": "integer",
-        "description": "用户数字 ID",
-        "required": false
-      },
-      {
-        "name": "username",
-        "param_type": "string",
-        "description": "用户登录名",
-        "required": false
+  "mcpServers": {
+    "business": {
+      "url": "https://example.invalid/mcp",
+      "allow": [{ "tenant_id": "default", "user_id": "alice" }],
+      "headers": {
+        "Authorization": { "env": "BUSINESS_MCP_TOKEN", "prefix": "Bearer " },
+        "X-User-Id": { "context": "user_id" },
+        "X-Tenant-Id": { "context": "tenant_id" },
+        "X-Session-Id": { "context": "session_id" }
       }
-    ],
-    "keywords": ["用户", "账号", "user"]
+    }
   }
-]
+}
 ```
 
-### Bot API Examples
+For local stdio servers use `command`, optional `args`, and `env` instead of `url` and `headers`. Prefer absolute server script paths because each connection runs in its conversation workspace:
 
-Chat with the bot (JSON or streaming):
+```json
+{
+  "mcpServers": {
+    "local": {
+      "command": "node",
+      "args": ["/path/to/mcp-server.js"],
+      "allow": "*",
+      "env": { "USER_ID": { "context": "user_id" } }
+    }
+  }
+}
+```
+
+Values may be literal strings, safe `${ENV_NAME}` substitutions, `{env:"NAME",prefix:"..."}`, or `{context:"user_id"|"tenant_id"|"session_id",prefix:"..."}`. Command-based secret resolution is not supported. Stdio children do not inherit the service environment; they receive a minimal environment, a session-specific home/temp/work directory, and administrator-declared values.
+
+Tools use Pi names such as `mcp__business__query`. The service selects direct tool exposure; optional `toolExposure` can set individual tools/patterns to `direct` or `hidden`. `enabled:false` disables a server, and `timeout` is its per-request timeout in seconds (default 30). Connections are independent per conversation and released on idle eviction/shutdown. Initial MCP readiness is bounded to 10 seconds; failure occurs before model prompting and can recover on a later run.
+
+MCP servers and executable programs are administrator-trusted integrations with their own business authorization. Logical session/workspace confinement is not an OS sandbox for these programs. Authentication should be configured through headers/environment. Interactive OAuth browser login and `/mcp` administration are not exposed over the Agent API.
+
+### Web Search
+
+Web search is an Agent tool capability. The generation model decides when to search and summarizes returned material; the MCP service performs the network requests. A model that supports tool calling can use it without a model vendor's built-in browsing feature.
+
+`config/mcp.web-search.example.json` connects to [Exa's hosted MCP](https://exa.ai/mcp) and exposes only `mcp__exa__web_search_exa` and `mcp__exa__web_fetch_exa`. The `web-search` Skill explains when to search, check original pages, and cite source links. Activate it explicitly with `"skill":"web-search"`, or let the model read it when its description matches the request.
+
+For a standalone setup:
 
 ```bash
-# Ask how to use the platform -> Bot routes to RAG
-curl -s -X POST http://127.0.0.1:8080/bot/chat \
-  -H 'content-type: application/json' \
-  -d '{"message": "如何配置平台的告警规则？"}'
-
-# Query live data -> Bot extracts parameters and executes SQL skill
-curl -s -X POST http://127.0.0.1:8080/bot/chat \
-  -H 'content-type: application/json' \
-  -d '{"message": "查询用户 1001 的基本信息"}'
-
-# SSE real-time streaming
-curl -s -N -X POST http://127.0.0.1:8080/bot/chat/stream \
-  -H 'content-type: application/json' \
-  -d '{"message": "查询服务 auth-service 最近的指标"}'
+AGENT_MCP_CONFIG_PATH=./config/mcp.web-search.example.json npm start
 ```
 
-List and test skills directly:
+If other MCP servers are already configured, merge the example's `exa` entry into the private configuration instead of replacing the file. `allow:"*"` permits all authenticated users; use exact tenant/user rules to restrict access. For Compose, set `AGENT_MCP_CONFIG_FILE=./config/mcp.web-search.example.json`, or mount your merged private file. Send `SIGHUP` after editing Skill/MCP files. Changing process environment variables requires restart.
 
-```bash
-# List available skills
-curl -s http://127.0.0.1:8080/skills
+Exa currently supports anonymous access with request limits. For higher limits, add `"headers":{"x-api-key":{"env":"EXA_API_KEY"}}` to the entry and set that variable privately; do not put credentials in URLs. Model API credentials are separate from search credentials. The empty `config/mcp.example.json` remains available for installations without external search.
 
-# Test skill execution
-curl -s -X POST http://127.0.0.1:8080/skills/test \
-  -H 'content-type: application/json' \
-  -d '{"skill_name": "query_user_info", "parameters": {"user_id": 1001}}'
-```
+Queries and requested URLs are sent to Exa. Send only necessary public terms/URLs; do not include credentials, internal documents, business results, or full conversations. Retrieved pages are external evidence, not instructions. Search does not perform business writes or deployment actions. The standard MCP readiness, per-conversation connection isolation, timeouts, cancellation, and tool budgets apply; unavailable MCP startup fails before model prompting.
+
+## Capability Lifecycle and Reloading
+
+Skills and MCP tools are managed purely through the local filesystem and configuration files:
+
+- **Skills**: configured under `AGENT_SKILLS_DIR` (default `./skills`).
+- **MCP Servers**: configured in `AGENT_MCP_CONFIG_PATH` (default `./config/mcp.json`).
+
+Send `SIGHUP` to the Agent process (or run `systemctl reload agent`) to reload configuration without stopping the service or interrupting running sessions:
+
+- Each run captures an immutable capability generation snapshot. In-flight runs continue using their initial snapshot until completion.
+- Subsequent runs in any conversation automatically use the newly loaded generation.
+- Retired capability snapshots and their cached runtimes are automatically cleaned up when active runs finish.
+- If a reload encounters invalid configuration (syntax errors, escaped symlinks, or duplicate tools), the reload fails atomically and the service keeps running on the previous valid generation.
 
 ## Configuration
 
-```text
-KNOWLEDGE_PILOT_ADDR=127.0.0.1:8080
-KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db
-KNOWLEDGE_PILOT_API_TOKEN=
-KNOWLEDGE_PILOT_SKILLS_PATH=./config/skills.json
-KP_DB_<REF>=mysql://user:pass@host:port/dbname
-KNOWLEDGE_PILOT_REQUEST_BODY_LIMIT_BYTES=2097152
-KNOWLEDGE_PILOT_CHUNK_SIZE=600
-KNOWLEDGE_PILOT_CHUNK_OVERLAP=100
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash
-KNOWLEDGE_PILOT_EMBEDDING_BASE_URL=http://127.0.0.1:11434
-KNOWLEDGE_PILOT_EMBEDDING_PATH=/api/embed
-KNOWLEDGE_PILOT_EMBEDDING_MODEL=hash-256
-KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=false
-KNOWLEDGE_PILOT_RAG_MODE=auto
-KNOWLEDGE_PILOT_LLM_PROVIDER=none
-KNOWLEDGE_PILOT_LLM_MODEL=
-KNOWLEDGE_PILOT_UI_ENABLED=true
-KNOWLEDGE_PILOT_RATE_LIMIT_RPM=300
-RUST_LOG=info
-```
+| Setting                                             | Default                                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `AGENT_ADDR`                                        | `127.0.0.1:8080`                                                                    |
+| `AGENT_DATA_DIR`                                    | `./data/agent`                                                                      |
+| `AGENT_API_TOKEN`                                   | unset; protected APIs return 503 until configured                                   |
+| `AGENT_SKILLS_DIR`                                  | `./skills`                                                                          |
+| `AGENT_MCP_CONFIG_PATH`                             | `./config/mcp.json`; missing default file means no servers                          |
+| `AGENT_LLM_PROVIDER`                                | `none`; aliases `custom`/`openai` → `openai-compatible`, `claude` → `anthropic`     |
+| `AGENT_LLM_MODEL`                                   | empty; required for messages                                                        |
+| `AGENT_LLM_BASE_URL`                                | OpenAI-compatible `/v1` endpoint; Anthropic API root                                |
+| `AGENT_LLM_API_KEY`                                 | unset; Anthropic requires it; OpenAI-compatible requires it or an explicit endpoint |
+| `AGENT_LLM_CONTEXT_WINDOW` / `AGENT_LLM_MAX_TOKENS` | `32768` / `4096`                                                                    |
+| `AGENT_REQUEST_BODY_LIMIT_BYTES`                    | `2097152`                                                                           |
+| `AGENT_MAX_MESSAGE_CHARS`                           | `20000`                                                                             |
+| `AGENT_RUN_TIMEOUT_MS`                              | `120000`                                                                            |
+| `AGENT_MAX_TURNS` / `AGENT_MAX_TOOL_CALLS`          | `10` / `30`                                                                         |
+| `AGENT_MAX_ACTIVE_SESSIONS`                         | `50`                                                                                |
+| `AGENT_IDLE_TIMEOUT_MS`                             | `900000`                                                                            |
+| `AGENT_SYSTEM_PROMPT`                               | concise business-assistant instructions                                             |
 
-Use `.env.example` as a local reference. The application reads environment variables directly; it does not require a `.env` loader. Deterministic local tests can still set `KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash`; production-like retrieval should use an embedding model such as `qwen3-embedding:0.6b` through Ollama.
-
-Embedding and answer generation are configured separately. `KNOWLEDGE_PILOT_EMBEDDING_*` controls how documents and questions are vectorized for retrieval; it must point to an embedding model, not a general chat model. When Ollama embedding is enabled, KnowledgePilot rejects common chat-model names such as `qwen3:8b` at startup. Use `KNOWLEDGE_PILOT_EMBEDDING_ALLOW_UNVERIFIED_MODEL=true` only for a custom embedding model that you have already verified through the embedding endpoint. `KNOWLEDGE_PILOT_LLM_*` controls answer generation and Agentic planning. The default LLM provider is unconfigured, and no chat model name is supplied automatically. Missing or blank model names, unsupported providers, or incomplete provider settings make RAG and bot queries return HTTP `503` with `code: "model_not_configured"`, including streaming endpoints before SSE starts. The response keeps the `{code,message}` error envelope and identifies the required model settings. Document management and `/skills/test` remain available. `KNOWLEDGE_PILOT_LLM_PROVIDER=extractive` is an explicit offline RAG test mode and does not enable bot chat.
-
-For local semantic retrieval through Ollama:
-
-```bash
-ollama pull qwen3-embedding:0.6b
-
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
-KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b \
-KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-ollama.db \
-cargo run -- ingest eval/documents
-```
-
-Switching embedding providers or models requires re-ingesting documents so stored vectors match the active model. KnowledgePilot filters retrieval by embedding model name and vector dimension to avoid mixing incompatible embeddings.
-
-For a local chat generator through Ollama's OpenAI-compatible endpoint, set `KNOWLEDGE_PILOT_LLM_PROVIDER=custom`, `KNOWLEDGE_PILOT_LLM_BASE_URL=http://127.0.0.1:11434/v1`, `KNOWLEDGE_PILOT_LLM_CHAT_COMPLETIONS_PATH=/chat/completions`, and `KNOWLEDGE_PILOT_LLM_MODEL` to a locally installed chat model. This is separate from `KNOWLEDGE_PILOT_EMBEDDING_MODEL`.
-
-Set `KNOWLEDGE_PILOT_LLM_PROVIDER=openai-compatible` and provide `KNOWLEDGE_PILOT_LLM_MODEL` and `KNOWLEDGE_PILOT_LLM_API_KEY` to use an OpenAI-compatible `/chat/completions` provider. Legacy `KNOWLEDGE_PILOT_OPENAI_BASE_URL`, `KNOWLEDGE_PILOT_OPENAI_MODEL`, and `KNOWLEDGE_PILOT_OPENAI_API_KEY` names are still supported.
-
-For a custom chat-completions-compatible provider, set `KNOWLEDGE_PILOT_LLM_PROVIDER=custom`, `KNOWLEDGE_PILOT_LLM_BASE_URL`, `KNOWLEDGE_PILOT_LLM_CHAT_COMPLETIONS_PATH`, and `KNOWLEDGE_PILOT_LLM_MODEL`. `KNOWLEDGE_PILOT_LLM_API_KEY` is optional for `custom`, so local providers that do not require authentication can be used. Use `KNOWLEDGE_PILOT_LLM_AUTH_HEADER`, `KNOWLEDGE_PILOT_LLM_AUTH_SCHEME`, and `KNOWLEDGE_PILOT_LLM_HEADERS_JSON` when a provider needs custom authentication or extra headers.
-
-For Claude, set `KNOWLEDGE_PILOT_LLM_PROVIDER=claude`, configure `KNOWLEDGE_PILOT_CLAUDE_MODEL` or `KNOWLEDGE_PILOT_LLM_MODEL`, and provide `KNOWLEDGE_PILOT_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`. The Claude provider uses Anthropic Messages format: `POST /v1/messages`, `x-api-key`, `anthropic-version`, top-level `system`, and `messages`. Override `KNOWLEDGE_PILOT_CLAUDE_BASE_URL`, `KNOWLEDGE_PILOT_CLAUDE_MESSAGES_PATH`, `KNOWLEDGE_PILOT_CLAUDE_MODEL`, `KNOWLEDGE_PILOT_CLAUDE_ANTHROPIC_VERSION`, and `KNOWLEDGE_PILOT_CLAUDE_MAX_TOKENS` as needed.
-
-With `KNOWLEDGE_PILOT_RAG_MODE=auto`, a configured LLM enables Agentic RAG planning automatically. Set `KNOWLEDGE_PILOT_RAG_MODE=traditional` to skip planning while using the configured answer model, or `agentic` to request Agentic RAG. Without a usable LLM, query requests return a model configuration error. Bot actions always come from the configured model; missing configuration or bot planning failures return an error and never fall back to keyword routing or execute a SQL skill automatically.
-
-Agentic RAG uses two bounded retrieval stages. It first plans search queries from the original question, then inspects the retrieved evidence and issues follow-up searches for referenced concepts, sections, figures, tables, policies, or named items that need expansion.
-
-Set `KNOWLEDGE_PILOT_API_TOKEN` in production to require `Authorization: Bearer <token>` for document and RAG API calls. The built-in UI sends `localStorage.kp_api_token` as the bearer token when it is present.
-
-## Production Deployment
-
-Docker Compose:
-
-```bash
-docker compose up --build -d
-curl -s http://127.0.0.1:8080/health
-```
-
-Preload local Markdown or text documents:
-
-```bash
-KNOWLEDGE_PILOT_DB_PATH=/var/lib/knowledge-pilot/data/knowledge-pilot.db \
-  knowledge-pilot ingest /srv/knowledge-base
-```
-
-Systemd install example:
-
-```bash
-cargo build --release --locked
-sudo install -m 0755 target/release/knowledge-pilot /usr/local/bin/knowledge-pilot
-sudo useradd --system --home-dir /var/lib/knowledge-pilot --create-home knowledge-pilot
-sudo mkdir -p /var/lib/knowledge-pilot/data
-sudo chown -R knowledge-pilot:knowledge-pilot /var/lib/knowledge-pilot
-sudo install -m 0644 deploy/systemd/knowledge-pilot.service /etc/systemd/system/knowledge-pilot.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now knowledge-pilot
-```
-
-For production exposure, run KnowledgePilot behind a reverse proxy that provides TLS and authentication. Keep `KNOWLEDGE_PILOT_DB_PATH` on persistent storage and include it in backups.
-
-Back up the SQLite database and its WAL files from the configured data directory. For consistent backups on a running service, prefer SQLite backup tooling or briefly stop the service before copying the database files.
-
-## Local Ingest
-
-```bash
-KNOWLEDGE_PILOT_DB_PATH=./data/knowledge-pilot.db cargo run -- ingest ./README.md ./eval/documents
-```
-
-The ingest command recursively imports `.md`, `.markdown`, and `.txt` files into the embedded SQLite database using stable file-path based document IDs. Markdown headings are preserved as chunk section metadata, and citations return both document title and section so the UI can show human-readable source locations. In the Q&A page, clicking a reference opens the original document and highlights the cited chunk when it can be matched in the source text.
-
-## Architecture
-
-```text
-document -> chunking -> embedding -> SQLite persistence
-question -> optional agent planning -> retrieval -> context -> answer -> citations
-```
-
-Module layout:
-
-```text
-src/
-  app.rs               # dependency wiring for the RAG service
-  main.rs              # server entrypoint
-  api.rs               # Axum routes and HTTP extraction
-  commands.rs          # eval and ingest CLI commands
-  config.rs            # environment-backed configuration
-  contracts.rs         # API request/response DTOs
-  db.rs                # SQLite connection setup
-  embedding.rs         # Embedder trait, hash embedder, and Ollama embedder
-  generation.rs        # Generator trait and extractive generator
-  http/                # shared response envelope and error codes
-  ingestion.rs         # document chunking
-  models.rs            # shared serializable contracts
-  rag.rs               # traditional RAG orchestration
-  retrieval.rs         # Retriever trait and SQLite-backed implementation
-  store.rs             # SQLite schema and persistence
-  ui.rs                # embedded static UI serving
-```
-
-Important design details:
-
-- `RagService` owns orchestration only: optional query planning, retrieval, context expansion, generation, citation recording.
-- `Embedder`, `Retriever`, `Generator`, and `QueryPlanner` keep provider details out of the core pipeline.
-- Embeddings are stored with model name and vector dimension; retrieval filters on both, so hash and Ollama vectors are never mixed.
-- Retrieval filters chunks by document access scope. Empty internal scope sets fail closed; API queries include `public` by default.
-- Markdown headings are preserved as chunk section metadata. Citations return document title, section, source path, chunk id, and score. The UI uses chunk ids to load source chunks and highlight cited passages in the original document modal.
-- RAG answers are stored in query history with citation JSON and confidence fields. `GET /rag/history` exposes recent records for lightweight audit and troubleshooting.
-- Low-confidence answers use an insufficient-context fallback so unsupported questions are visible during testing and operations.
-- Agentic RAG runs bounded planning and follow-up retrieval when a usable LLM planner is configured. Without a usable LLM, the service remains traditional RAG.
-- Static UI assets are embedded into the Rust binary, so UI changes require rebuilding before verification.
+Model credentials remain in memory and are not injected into prompts/tool schemas. Public errors are sanitized; normal logs contain lifecycle information rather than conversations or raw provider responses.
 
 ## Verification
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --locked
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=hash \
-  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
-  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
-KNOWLEDGE_PILOT_EMBEDDING_PROVIDER=ollama \
-  KNOWLEDGE_PILOT_EMBEDDING_MODEL=qwen3-embedding:0.6b \
-  KNOWLEDGE_PILOT_LLM_PROVIDER=extractive \
-  KNOWLEDGE_PILOT_RAG_MODE=traditional cargo run -- eval
+npm run check
+npm run build
+npm run format:check
+npm test
 ./scripts/smoke.sh
+git diff --check
 ```
 
-`cargo run -- eval` imports `eval/documents` and runs `eval/cases.json`. The current fixture covers 91 Chinese and English Markdown documents with 184 answer-quality cases, including 17 cross-domain fixtures under `eval/documents/diverse/`. Each case checks that retrieval cites the expected source, avoids unexpected citation sources by default, and, when configured, that the generated answer contains required business key points or the expected confidence level. This keeps regressions visible for retrieval quality, answer completeness, source cleanliness, low-confidence behavior, and formatting.
+Tests use the real installed Pi SDK with local fake OpenAI-compatible model and HTTP/stdio MCP servers, not production systems. They cover Skills, prompting, MCP calls, identity/ownership, separate user/tenant/conversation context, confined reads and symlinks, concurrent streams, cancellation, deadlines/budgets, persisted recovery, missing-model behavior, removed legacy routes, atomic reload failure, and next-run capability changes in existing conversations.
 
-## Roadmap
+## Deployment and Storage
 
-1. Add sqlite-vec as an optional embedded retriever.
-2. Add richer offline RAG quality metrics.
-3. Add metadata filters beyond access scope.
-4. Add admin-facing corpus diagnostics and ingestion quality reports.
+```bash
+docker compose up --build -d
+```
 
-## License
+The image uses Node.js 26 and runs as the non-root `node` user. Compose publishes 8080, persists `agent-data`, and mounts a read-only administrator MCP configuration (the empty example by default). Set `AGENT_MCP_CONFIG_FILE` to the host's private JSON file and configure `AGENT_` variables before deployment. `deploy/systemd/agent.service` is an installation example for `/opt/agent` and state under `/var/lib/agent`; provision its user/state directory and private environment file separately.
 
-MIT
+Back up the entire data directory after a clean stop: the SQLite ownership/message/run database and Pi JSONL context files form one logical state. Do not copy only the SQLite file while ignoring Pi contexts or active WAL files.
+
+The portal frontend/backend integration is a separate change: add the Agent proxy and streaming UI in haiwell123 against this contract.

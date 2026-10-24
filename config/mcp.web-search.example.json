@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "exa": {
+      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+      "allow": "*",
+      "timeout": 30,
+      "toolExposure": {
+        "web_search_exa": "direct",
+        "web_fetch_exa": "direct",
+        "*": "hidden"
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Pi Agent API service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent
+Group=agent
+WorkingDirectory=/opt/agent
+EnvironmentFile=/etc/agent/agent.env
+Environment=NODE_ENV=production
+Environment=AGENT_ADDR=127.0.0.1:8080
+Environment=AGENT_DATA_DIR=/var/lib/agent
+Environment=AGENT_SKILLS_DIR=/opt/agent/skills
+Environment=AGENT_MCP_CONFIG_PATH=/etc/agent/mcp.json
+ExecStart=/usr/bin/node /opt/agent/dist/src/main.js
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agent
+
+[Install]
+WantedBy=multi-user.target

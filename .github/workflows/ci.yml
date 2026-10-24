@@ -6,17 +6,16 @@ on:
   pull_request:
 
 jobs:
-  rust:
+  agent:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
-      - run: KNOWLEDGE_PILOT_DB_PATH=/tmp/knowledge-pilot-eval.db KNOWLEDGE_PILOT_LLM_PROVIDER=extractive cargo run --locked -- eval
+          node-version: "26"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm run format:check
+      - run: npm test
       - run: ./scripts/smoke.sh

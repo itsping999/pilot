@@ -1,0 +1,29 @@
+{
+  "name": "pilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Session-isolated Pi Agent API service with Skills and MCP.",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"skills/**/*.md\" package.json tsconfig.json \"config/*.example.json\" README.md AGENTS.md",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"skills/**/*.md\" package.json tsconfig.json \"config/*.example.json\" README.md AGENTS.md",
+    "start": "node --env-file-if-exists=.env dist/src/main.js",
+    "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js",
+    "smoke": "npm run build && node --test dist/test/smoke.test.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-mcp": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3"
+  }
+}

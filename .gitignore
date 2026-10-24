@@ -11,13 +11,10 @@
 .env
 .env.*
 !.env.example
-.env.local
-.env.*.local
 
-# Build
-target/
+# Dependencies and build
+node_modules/
 dist/
-build/
 
 # Data
 data/
@@ -36,37 +33,23 @@ data/
 *.pid
 *.sock
 
-# Profiling
-*.profraw
-*.profdata
-*.flamegraph
-
 # Coverage
-.coverage
 coverage/
 
 # Caches
 .cache/
 .direnv/
 
-# Tmux logs
-tmux-*.log
-
 # Temp
 tmp/
-
-# Temporary eval databases
-/kp-*.db
-/tmp/kp-*.db
-
-# Ollama runtime data
-/models/
 
 # macOS extended attributes
 ._*
 
-# Node modules (if any frontend tooling added later)
-node_modules/
+# Agent runtime and administrator MCP credentials
+/config/mcp.json
+/config/runtime/
+*.jsonl
 
 # IDE workspace settings
 *.code-workspace

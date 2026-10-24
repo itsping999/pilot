@@ -1,37 +1,28 @@
-# ---- Build stage ----
-FROM rust:1.85-slim AS builder
-
-RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
-
+FROM node:26-bookworm-slim AS builder
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY src/ src/
-COPY static/ static/
+RUN npm run build && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
 
-RUN cargo build --release --locked
-
-# ---- Runtime stage ----
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
-
-RUN useradd -r -s /bin/false knowledgepilot
-RUN mkdir -p /data && chown knowledgepilot:knowledgepilot /data
-
-COPY --from=builder /app/target/release/knowledge-pilot /usr/local/bin/knowledge-pilot
-
-USER knowledgepilot
-WORKDIR /data
-
-ENV KNOWLEDGE_PILOT_ADDR=0.0.0.0:8080
-ENV KNOWLEDGE_PILOT_DB_PATH=/data/knowledge-pilot.db
-ENV KNOWLEDGE_PILOT_LLM_PROVIDER=none
-ENV KNOWLEDGE_PILOT_UI_ENABLED=true
-ENV RUST_LOG=info
-
+FROM node:26-bookworm-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/node_modules/ node_modules/
+COPY --from=builder /app/dist/src/ dist/src/
+COPY admin/ admin/
+COPY skills/ skills/
+RUN mkdir -p /app/data/agent /app/config && chown -R node:node /app/data /app/config
+USER node
+ENV AGENT_ADDR=0.0.0.0:8080
+ENV AGENT_DATA_DIR=/app/data/agent
+ENV AGENT_SKILLS_DIR=/app/skills
+ENV AGENT_MCP_CONFIG_PATH=/app/config/mcp.json
+ENV AGENT_ADMIN_ADDR=0.0.0.0:8082
+ENV AGENT_LLM_PROVIDER=none
 EXPOSE 8080
-
+EXPOSE 8082
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-    CMD curl -fsS http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["knowledge-pilot"]
+  CMD node -e 'fetch("http://127.0.0.1:8080/health").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))'
+CMD ["node", "dist/src/main.js"]
